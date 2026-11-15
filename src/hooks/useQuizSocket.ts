@@ -24,6 +24,37 @@ function getOrCreatePlayerToken(): string {
   }
 }
 
+function resolveWsUrl(): { url: string; missingPagesBackend: boolean } {
+  const configured = (import.meta.env.VITE_WS_URL as string | undefined)?.trim();
+  if (configured) {
+    let normalized = configured;
+    if (normalized.startsWith('https://')) {
+      normalized = `wss://${normalized.slice('https://'.length)}`;
+    } else if (normalized.startsWith('http://')) {
+      normalized = `ws://${normalized.slice('http://'.length)}`;
+    } else if (!normalized.startsWith('ws://') && !normalized.startsWith('wss://')) {
+      const proto = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
+      normalized = `${proto}${normalized}`;
+    }
+    try {
+      const parsed = new URL(normalized);
+      if (!parsed.pathname || parsed.pathname === '/') {
+        parsed.pathname = '/ws';
+      }
+      return { url: parsed.toString(), missingPagesBackend: false };
+    } catch {
+      return { url: normalized, missingPagesBackend: false };
+    }
+  }
+
+  const isStaticPagesHost = window.location.hostname.endsWith('.github.io');
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return {
+    url: `${protocol}//${window.location.host}/ws`,
+    missingPagesBackend: isStaticPagesHost,
+  };
+}
+
 export function useQuizSocket() {
   const [snapshot, setSnapshot] = useState<RoomSnapshot | null>(null);
   const [connected, setConnected] = useState(false);
@@ -53,9 +84,16 @@ export function useQuizSocket() {
       return;
     }
 
+    const { url: wsUrl, missingPagesBackend } = resolveWsUrl();
+    if (missingPagesBackend) {
+      setConnected(false);
+      setConnecting(false);
+      setError('Static GitHub Pages host detected without VITE_WS_URL configured. Point VITE_WS_URL to your deployed QuizDuel WebSocket backend.');
+      return;
+    }
+
     setConnecting(true);
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+    const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
     ws.onopen = () => {

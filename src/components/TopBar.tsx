@@ -23,7 +23,7 @@ export const TopBar: React.FC<TopBarProps> = ({
       <div className="mx-auto flex h-14 sm:h-16 max-w-6xl items-center justify-between gap-4 sm:gap-8 px-4 sm:px-6">
         {/* Zone 1: Single text element wordmark */}
         <a
-          href="/"
+          href={import.meta.env.BASE_URL}
           onClick={(e) => {
             if (inRoom) {
               e.preventDefault();

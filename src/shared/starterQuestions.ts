@@ -1,4 +1,4 @@
-import { Question } from './types';
+import type { Question } from './types.ts';
 
 export const STARTER_DECK_TITLE = 'Starter Warmup Pack (Sample MCQs)';
 
