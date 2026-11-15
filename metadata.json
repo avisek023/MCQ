@@ -1,0 +1,6 @@
+{
+  "name": "QuizDuel — Private 2-Player MCQ Arena",
+  "description": "Play head-to-head MCQ duels with a friend in a private room featuring secret lock-in, simultaneous answer reveal, speed bonuses, streaks, and full match review.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
