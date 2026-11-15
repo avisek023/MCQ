@@ -6,35 +6,22 @@ Real-time **1 Host + 2 Participants** private MCQ arena with secret answer lock-
 
 - **Node.js >= 22** (Node.js 24 LTS recommended)
 
-## Local Development
+## Deploy as a 100% Static Website on GitHub Pages (Zero Setup)
+
+No backend server, environment variables, or secrets are required to publish on GitHub Pages:
+
+1. Push the repository to GitHub (private repos are supported on GitHub Pro, Team, or Enterprise; GitHub Actions runs on both public and private repos).
+2. In your repository **Settings → Pages**, set **Source** to **GitHub Actions**.
+3. Push to `main` (or trigger **Deploy Frontend to GitHub Pages** under **Actions**).
+4. Share your GitHub Pages URL — when hosted statically, QuizDuel automatically uses an encrypted serverless WSS room relay so the Host browser coordinates the match and both Android participants can join with the room code and play seamlessly. *(Keep the Host tab open while the match runs so auto-timers advance each round.)*
+
+All workflows use **Node.js 24-native** GitHub Actions (`actions/checkout@v6`, `actions/setup-node@v6`, `actions/configure-pages@v6`, `actions/upload-pages-artifact@v5`, `actions/deploy-pages@v5`).
+
+## Local Development / Full-Stack Container Deploy
 
 ```bash
 npm install
 npm run dev
 ```
 
-The server runs on port `3000` (Express + WebSockets on `/ws` + Vite dev middleware).
-
-## Publishing from a Private GitHub Repository
-
-QuizDuel requires a live WebSocket backend (`server.ts`) for room state and simultaneous answer reveal. You have two deployment options:
-
-### Option A — Full-Stack Container Deploy (Recommended for Private Repos)
-
-Deploy directly from your private GitHub repository using the included `Dockerfile` (Cloud Run, Render, Railway, or Fly.io):
-
-- **Port:** `3000`
-- **Start command:** `npm start` (`NODE_ENV=production node server.ts`)
-- **Health check:** `GET /api/health`
-
-GitHub Actions CI (`.github/workflows/ci.yml`) runs typechecking, Vite build, and a Node 24 production server smoke test automatically on every push/PR in private repos.
-
-### Option B — Split Frontend on GitHub Pages + Hosted Backend
-
-> **Note on Private Repositories:** GitHub Pages on a private repository requires **GitHub Pro, Team, or Enterprise** (otherwise deploy the full-stack app via Option A, or make only a frontend mirror public).
-
-1. Deploy the backend (`server.ts` / `Dockerfile`) to any Node/container host and copy its public URL (e.g. `https://quizduel-backend.example.com`).
-2. In your GitHub repository **Settings → Secrets and variables → Actions → Variables**, add:
-   - `VITE_WS_URL`: `wss://quizduel-backend.example.com/ws`
-3. In **Settings → Pages**, set **Source** to **GitHub Actions**.
-4. Push to `main` (or trigger **Deploy Frontend to GitHub Pages** manually). The workflow uses Node 24-native actions (`actions/checkout@v6`, `actions/setup-node@v6`, `actions/configure-pages@v6`, `actions/upload-pages-artifact@v5`, `actions/deploy-pages@v5`).
+For full-stack container hosting (`Dockerfile`, port `3000`, `npm start`), QuizDuel runs `server.ts` directly on Node.js 22/24 (`GET /api/health`).

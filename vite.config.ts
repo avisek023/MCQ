@@ -5,7 +5,8 @@ import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
   const rawBase = process.env.VITE_BASE_PATH?.trim() || '/';
-  const normalizedBase = rawBase.endsWith('/') ? rawBase : `${rawBase}/`;
+  const withLeading = rawBase.startsWith('/') ? rawBase : `/${rawBase}`;
+  const normalizedBase = withLeading.endsWith('/') ? withLeading : `${withLeading}/`;
 
   return {
     base: normalizedBase,

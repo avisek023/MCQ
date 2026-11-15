@@ -24,35 +24,42 @@ function getOrCreatePlayerToken(): string {
   }
 }
 
-function resolveWsUrl(): { url: string; missingPagesBackend: boolean } {
+function isKnownStaticHost(): boolean {
+  const host = window.location.hostname.toLowerCase();
+  return (
+    window.location.protocol === 'file:' ||
+    host.endsWith('.github.io') ||
+    host.endsWith('.gitlab.io') ||
+    host.endsWith('.pages.dev') ||
+    host.endsWith('.netlify.app') ||
+    host.endsWith('.vercel.app') ||
+    host.endsWith('.surge.sh')
+  );
+}
+
+function resolveConfiguredWsUrl(): string | null {
   const configured = (import.meta.env.VITE_WS_URL as string | undefined)?.trim();
-  if (configured) {
-    let normalized = configured;
-    if (normalized.startsWith('https://')) {
-      normalized = `wss://${normalized.slice('https://'.length)}`;
-    } else if (normalized.startsWith('http://')) {
-      normalized = `ws://${normalized.slice('http://'.length)}`;
-    } else if (!normalized.startsWith('ws://') && !normalized.startsWith('wss://')) {
-      const proto = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
-      normalized = `${proto}${normalized}`;
-    }
-    try {
-      const parsed = new URL(normalized);
-      if (!parsed.pathname || parsed.pathname === '/') {
-        parsed.pathname = '/ws';
-      }
-      return { url: parsed.toString(), missingPagesBackend: false };
-    } catch {
-      return { url: normalized, missingPagesBackend: false };
-    }
+  if (!configured) return null;
+
+  let normalized = configured;
+  if (normalized.startsWith('https://')) {
+    normalized = `wss://${normalized.slice('https://'.length)}`;
+  } else if (normalized.startsWith('http://')) {
+    normalized = `ws://${normalized.slice('http://'.length)}`;
+  } else if (!normalized.startsWith('ws://') && !normalized.startsWith('wss://')) {
+    const proto = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
+    normalized = `${proto}${normalized}`;
   }
 
-  const isStaticPagesHost = window.location.hostname.endsWith('.github.io');
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return {
-    url: `${protocol}//${window.location.host}/ws`,
-    missingPagesBackend: isStaticPagesHost,
-  };
+  try {
+    const parsed = new URL(normalized);
+    if (!parsed.pathname || parsed.pathname === '/') {
+      parsed.pathname = '/ws';
+    }
+    return parsed.toString();
+  } catch {
+    return normalized;
+  }
 }
 
 export function useQuizSocket() {
@@ -63,6 +70,8 @@ export function useQuizSocket() {
   const [serverOffsetMs, setServerOffsetMs] = useState(0);
 
   const wsRef = useRef<WebSocket | null>(null);
+  const staticRelayRef = useRef<import('../static/staticRoomRelay').StaticRoomRelay | null>(null);
+  const wsVerifiedRef = useRef(false);
   const tokenRef = useRef<string>(getOrCreatePlayerToken());
   const snapshotRef = useRef<RoomSnapshot | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
@@ -70,7 +79,164 @@ export function useQuizSocket() {
 
   snapshotRef.current = snapshot;
 
+  const handleServerMessage = useCallback((msg: ServerMessage) => {
+    if (msg.type === 'room:error') {
+      if (msg.code === 'SESSION_EXPIRED' || msg.code === 'ROOM_NOT_FOUND') {
+        try {
+          sessionStorage.removeItem(ROOM_STORAGE_KEY);
+        } catch {
+          // ignore
+        }
+        if (msg.code === 'SESSION_EXPIRED') {
+          return;
+        }
+      }
+      setError(msg.message);
+      return;
+    }
+
+    if (msg.type === 'room:joined' || msg.type === 'room:state') {
+      setError(null);
+      setServerOffsetMs(msg.snapshot.serverNow - Date.now());
+      setSnapshot(msg.snapshot);
+      try {
+        sessionStorage.setItem(ROOM_STORAGE_KEY, msg.snapshot.roomCode);
+      } catch {
+        // ignore
+      }
+      return;
+    }
+
+    if (msg.type === 'answer:locked_self') {
+      soundEngine.playLockIn();
+      setSnapshot((prev) =>
+        prev
+          ? {
+              ...prev,
+              selfLockedOption: msg.optionIndex,
+              lockedPlayerIds: prev.lockedPlayerIds.includes(prev.selfId)
+                ? prev.lockedPlayerIds
+                : [...prev.lockedPlayerIds, prev.selfId],
+            }
+          : prev
+      );
+      return;
+    }
+
+    if (msg.type === 'answer:locked_opponent') {
+      soundEngine.playOpponentLocked();
+      setSnapshot((prev) =>
+        prev
+          ? {
+              ...prev,
+              opponentLocked: true,
+              lockedPlayerIds: prev.lockedPlayerIds.includes(msg.playerId)
+                ? prev.lockedPlayerIds
+                : [...prev.lockedPlayerIds, msg.playerId],
+            }
+          : prev
+      );
+      return;
+    }
+
+    if (msg.type === 'round:started') {
+      setServerOffsetMs(msg.serverNow - Date.now());
+      setSnapshot((prev) =>
+        prev
+          ? {
+              ...prev,
+              phase: 'QUESTION',
+              players: prev.players.map((p) => ({ ...p, readyForNext: false })),
+              currentQuestionIndex: msg.questionIndex,
+              totalQuestions: msg.totalQuestions,
+              currentQuestion: msg.question,
+              questionStartedAt: msg.questionStartedAt,
+              serverNow: msg.serverNow,
+              selfLockedOption: null,
+              opponentLocked: false,
+              lockedPlayerIds: [],
+              currentReview: null,
+            }
+          : prev
+      );
+      return;
+    }
+
+    if (msg.type === 'round:revealed') {
+      setSnapshot((prev) => {
+        if (!prev) return prev;
+        const selfPick = msg.review.picks[prev.selfId];
+        if (selfPick?.isCorrect) {
+          soundEngine.playCorrect();
+        } else {
+          soundEngine.playWrong();
+        }
+        return {
+          ...prev,
+          phase: 'REVEAL',
+          players: msg.players,
+          currentReview: msg.review,
+          history: prev.history.some((r) => r.questionIndex === msg.review.questionIndex)
+            ? prev.history
+            : [...prev.history, msg.review],
+        };
+      });
+      return;
+    }
+
+    if (msg.type === 'match:finished') {
+      soundEngine.playVictoryFanfare();
+      setSnapshot((prev) =>
+        prev
+          ? {
+              ...prev,
+              phase: 'MATCH_OVER',
+              players: msg.players,
+              history: msg.history,
+            }
+          : prev
+      );
+      return;
+    }
+
+    if (msg.type === 'chat:message') {
+      setSnapshot((prev) => {
+        if (!prev) return prev;
+        if (prev.messages.some((m) => m.id === msg.message.id)) return prev;
+        if (msg.message.senderId !== prev.selfId) {
+          soundEngine.playChatPop();
+        }
+        return {
+          ...prev,
+          messages: [...prev.messages, msg.message].slice(-100),
+        };
+      });
+    }
+  }, []);
+
+  const startStaticRelay = useCallback(async () => {
+    if (staticRelayRef.current || intentionalCloseRef.current) return;
+    setConnecting(true);
+    const { StaticRoomRelay } = await import('../static/staticRoomRelay');
+    if (staticRelayRef.current || intentionalCloseRef.current) return;
+
+    const relay = new StaticRoomRelay(
+      tokenRef.current,
+      handleServerMessage,
+      (isConn, isConnecting) => {
+        setConnected(isConn);
+        setConnecting(isConnecting);
+      }
+    );
+    staticRelayRef.current = relay;
+    relay.connect();
+  }, [handleServerMessage]);
+
   const send = useCallback((msg: ClientMessage) => {
+    if (staticRelayRef.current) {
+      void staticRelayRef.current.send(msg);
+      return;
+    }
     const ws = wsRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(msg));
@@ -80,23 +246,30 @@ export function useQuizSocket() {
   }, []);
 
   const connect = useCallback(() => {
-    if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
+    const configuredWsUrl = resolveConfiguredWsUrl();
+
+    if (!configuredWsUrl && isKnownStaticHost()) {
+      void startStaticRelay();
       return;
     }
 
-    const { url: wsUrl, missingPagesBackend } = resolveWsUrl();
-    if (missingPagesBackend) {
-      setConnected(false);
-      setConnecting(false);
-      setError('Static GitHub Pages host detected without VITE_WS_URL configured. Point VITE_WS_URL to your deployed QuizDuel WebSocket backend.');
+    if (
+      wsRef.current &&
+      (wsRef.current.readyState === WebSocket.OPEN ||
+        wsRef.current.readyState === WebSocket.CONNECTING)
+    ) {
       return;
     }
+
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = configuredWsUrl || `${protocol}//${window.location.host}/ws`;
 
     setConnecting(true);
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
     ws.onopen = () => {
+      wsVerifiedRef.current = true;
       setConnected(true);
       setConnecting(false);
       setError(null);
@@ -127,151 +300,25 @@ export function useQuizSocket() {
       } catch {
         return;
       }
-
-      if (msg.type === 'room:error') {
-        if (msg.code === 'SESSION_EXPIRED' || msg.code === 'ROOM_NOT_FOUND') {
-          try {
-            sessionStorage.removeItem(ROOM_STORAGE_KEY);
-          } catch {
-            // ignore
-          }
-          if (msg.code === 'SESSION_EXPIRED') {
-            return;
-          }
-        }
-        setError(msg.message);
-        return;
-      }
-
-      if (msg.type === 'room:joined' || msg.type === 'room:state') {
-        setError(null);
-        setServerOffsetMs(msg.snapshot.serverNow - Date.now());
-        setSnapshot(msg.snapshot);
-        try {
-          sessionStorage.setItem(ROOM_STORAGE_KEY, msg.snapshot.roomCode);
-        } catch {
-          // ignore
-        }
-        return;
-      }
-
-      if (msg.type === 'answer:locked_self') {
-        soundEngine.playLockIn();
-        setSnapshot((prev) =>
-          prev
-            ? {
-                ...prev,
-                selfLockedOption: msg.optionIndex,
-                lockedPlayerIds: prev.lockedPlayerIds.includes(prev.selfId)
-                  ? prev.lockedPlayerIds
-                  : [...prev.lockedPlayerIds, prev.selfId],
-              }
-            : prev
-        );
-        return;
-      }
-
-      if (msg.type === 'answer:locked_opponent') {
-        soundEngine.playOpponentLocked();
-        setSnapshot((prev) =>
-          prev
-            ? {
-                ...prev,
-                opponentLocked: true,
-                lockedPlayerIds: prev.lockedPlayerIds.includes(msg.playerId)
-                  ? prev.lockedPlayerIds
-                  : [...prev.lockedPlayerIds, msg.playerId],
-              }
-            : prev
-        );
-        return;
-      }
-
-      if (msg.type === 'round:started') {
-        setServerOffsetMs(msg.serverNow - Date.now());
-        setSnapshot((prev) =>
-          prev
-            ? {
-                ...prev,
-                phase: 'QUESTION',
-                players: prev.players.map((p) => ({ ...p, readyForNext: false })),
-                currentQuestionIndex: msg.questionIndex,
-                totalQuestions: msg.totalQuestions,
-                currentQuestion: msg.question,
-                questionStartedAt: msg.questionStartedAt,
-                serverNow: msg.serverNow,
-                selfLockedOption: null,
-                opponentLocked: false,
-                lockedPlayerIds: [],
-                currentReview: null,
-              }
-            : prev
-        );
-        return;
-      }
-
-      if (msg.type === 'round:revealed') {
-        setSnapshot((prev) => {
-          if (!prev) return prev;
-          const selfPick = msg.review.picks[prev.selfId];
-          if (selfPick?.isCorrect) {
-            soundEngine.playCorrect();
-          } else {
-            soundEngine.playWrong();
-          }
-          return {
-            ...prev,
-            phase: 'REVEAL',
-            players: msg.players,
-            currentReview: msg.review,
-            history: prev.history.some((r) => r.questionIndex === msg.review.questionIndex)
-              ? prev.history
-              : [...prev.history, msg.review],
-          };
-        });
-        return;
-      }
-
-      if (msg.type === 'match:finished') {
-        soundEngine.playVictoryFanfare();
-        setSnapshot((prev) =>
-          prev
-            ? {
-                ...prev,
-                phase: 'MATCH_OVER',
-                players: msg.players,
-                history: msg.history,
-              }
-            : prev
-        );
-        return;
-      }
-
-      if (msg.type === 'chat:message') {
-        setSnapshot((prev) => {
-          if (!prev) return prev;
-          if (prev.messages.some((m) => m.id === msg.message.id)) return prev;
-          if (msg.message.senderId !== prev.selfId) {
-            soundEngine.playChatPop();
-          }
-          return {
-            ...prev,
-            messages: [...prev.messages, msg.message].slice(-100),
-          };
-        });
-      }
+      handleServerMessage(msg);
     };
 
     ws.onclose = () => {
       setConnected(false);
       setConnecting(false);
-      if (!intentionalCloseRef.current) {
-        reconnectTimerRef.current = window.setTimeout(() => {
-          connect();
-        }, 1200);
+      if (intentionalCloseRef.current) return;
+
+      // If no configured backend URL and the initial /ws probe failed, run zero-config static mode
+      if (!configuredWsUrl && !wsVerifiedRef.current) {
+        void startStaticRelay();
+        return;
       }
+
+      reconnectTimerRef.current = window.setTimeout(() => {
+        connect();
+      }, 1200);
     };
-  }, []);
+  }, [handleServerMessage, startStaticRelay]);
 
   useEffect(() => {
     intentionalCloseRef.current = false;
@@ -279,6 +326,7 @@ export function useQuizSocket() {
 
     const handleWakeReconnect = () => {
       if (document.visibilityState === 'visible') {
+        if (staticRelayRef.current) return;
         const ws = wsRef.current;
         if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
           if (reconnectTimerRef.current) {
@@ -301,6 +349,8 @@ export function useQuizSocket() {
         clearTimeout(reconnectTimerRef.current);
       }
       wsRef.current?.close();
+      staticRelayRef.current?.destroy();
+      staticRelayRef.current = null;
     };
   }, [connect]);
 
