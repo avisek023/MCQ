@@ -16,6 +16,7 @@ export default function App() {
     createRoom,
     joinRoom,
     leaveRoom,
+    kickPlayer,
     updateSettings,
     updateDeck,
     startMatch,
@@ -26,7 +27,28 @@ export default function App() {
   } = useQuizSocket();
 
   const [muted, setMuted] = useState(false);
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
+    try {
+      return localStorage.getItem('quizduel_theme') === 'dark' ? 'dark' : 'light';
+    } catch {
+      return 'light';
+    }
+  });
   const nameInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    root.classList.toggle('dark', theme === 'dark');
+    try {
+      localStorage.setItem('quizduel_theme', theme);
+    } catch {
+      // ignore storage failure
+    }
+    const metaTheme = document.querySelector('meta[name="theme-color"]');
+    if (metaTheme) {
+      metaTheme.setAttribute('content', theme === 'dark' ? '#0B1221' : '#FFFFFF');
+    }
+  }, [theme]);
 
   const initialRoomCode = useMemo(() => {
     const param = new URLSearchParams(window.location.search).get('room');
@@ -49,6 +71,10 @@ export default function App() {
     soundEngine.setMuted(next);
   };
 
+  const handleToggleTheme = () => {
+    setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
+  };
+
   const handleNavigateSection = (sectionId: string) => {
     const el = document.getElementById(sectionId);
     el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -64,12 +90,14 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-dvh flex flex-col bg-[#0B1221] text-slate-100">
+    <div className="min-h-dvh flex flex-col bg-white text-slate-900 dark:bg-[#0B1221] dark:text-slate-100 transition-colors duration-200">
       <TopBar
         inRoom={Boolean(snapshot)}
         roomCode={snapshot?.roomCode}
         muted={muted}
+        theme={theme}
         onToggleMute={handleToggleMute}
+        onToggleTheme={handleToggleTheme}
         onPrimaryAction={handleTopBarPrimaryAction}
         onNavigateSection={handleNavigateSection}
       />
@@ -91,6 +119,7 @@ export default function App() {
             onUpdateSettings={updateSettings}
             onUpdateDeck={updateDeck}
             onStartMatch={startMatch}
+            onKickPlayer={kickPlayer}
             onSendChat={sendChat}
           />
         ) : snapshot.phase === 'QUESTION' || snapshot.phase === 'REVEAL' ? (
@@ -99,6 +128,7 @@ export default function App() {
             serverOffsetMs={serverOffsetMs}
             onLockAnswer={lockAnswer}
             onNextRound={nextRound}
+            onKickPlayer={kickPlayer}
             onSendChat={sendChat}
           />
         ) : (
@@ -110,8 +140,8 @@ export default function App() {
         )}
       </div>
 
-      <footer className="border-t border-white/10 py-6 text-center text-xs text-slate-500">
-        QuizDuel · Private 2-Player MCQ Arena
+      <footer className="border-t border-slate-200 dark:border-white/10 py-6 text-center text-xs text-slate-500 dark:text-slate-500">
+        QuizDuel · Private MCQ Arena
       </footer>
     </div>
   );

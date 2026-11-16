@@ -25,9 +25,15 @@ const __dirname = path.dirname(__filename);
 const PORT = Number(process.env.PORT || 3000);
 const ROOM_IDLE_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
 
+const AWAY_GRACE_MS = 5 * 60 * 1000; // 5 minutes
+const AWAY_MAX_MISSED_QUESTIONS = 3;
+
 interface ServerPlayer extends PlayerInfo {
   token: string;
   ws: WebSocket | null;
+  disconnectedAt: number | null;
+  questionsMissedWhileAway: number;
+  awayKickTimer: NodeJS.Timeout | null;
 }
 
 interface PendingPick {
@@ -85,6 +91,22 @@ function getParticipants(room: ServerRoom): ServerPlayer[] {
   return room.players.filter((p) => p.role === 'participant');
 }
 
+function getActivePlayers(room: ServerRoom): ServerPlayer[] {
+  if (room.settings.hostMode === 'solo') {
+    return room.players.filter((p) => p.isHost);
+  }
+  if (room.settings.hostMode === 'play_with') {
+    return room.players;
+  }
+  return room.players.filter((p) => p.role === 'participant');
+}
+
+function isActivePlayer(room: ServerRoom, player: ServerPlayer): boolean {
+  if (room.settings.hostMode === 'solo') return player.isHost;
+  if (room.settings.hostMode === 'play_with') return true;
+  return player.role === 'participant';
+}
+
 function toPublicPlayer(p: ServerPlayer): PlayerInfo {
   return {
     id: p.id,
@@ -99,6 +121,7 @@ function toPublicPlayer(p: ServerPlayer): PlayerInfo {
     totalResponseMs: p.totalResponseMs,
     answeredCount: p.answeredCount,
     readyForNext: p.readyForNext,
+    questionsMissedWhileAway: p.questionsMissedWhileAway,
   };
 }
 
@@ -113,12 +136,11 @@ function toClientQuestion(q: Question): ClientQuestion {
 
 function buildSnapshot(room: ServerRoom, selfPlayer: ServerPlayer): RoomSnapshot {
   const selfPick = room.currentPicks.get(selfPlayer.id);
-  const participants = getParticipants(room);
-  const otherParticipant = participants.find((p) => p.id !== selfPlayer.id);
-  const opponentLocked =
-    selfPlayer.role === 'participant'
-      ? Boolean(otherParticipant && room.currentPicks.has(otherParticipant.id))
-      : room.currentPicks.size > 0;
+  const activePlayers = getActivePlayers(room);
+  const otherActivePlayers = activePlayers.filter((p) => p.id !== selfPlayer.id);
+  const opponentLocked = isActivePlayer(room, selfPlayer)
+    ? otherActivePlayers.some((p) => room.currentPicks.has(p.id))
+    : activePlayers.some((p) => room.currentPicks.has(p.id));
 
   const canEditDeck =
     room.phase === 'LOBBY' && (selfPlayer.isHost || room.settings.allowGuestUpload);
@@ -187,6 +209,13 @@ function broadcastSnapshot(room: ServerRoom): void {
   }
 }
 
+function clearPlayerAwayTimer(player: ServerPlayer): void {
+  if (player.awayKickTimer) {
+    clearTimeout(player.awayKickTimer);
+    player.awayKickTimer = null;
+  }
+}
+
 function clearRoomTimers(room: ServerRoom): void {
   if (room.roundTimer) {
     clearTimeout(room.roundTimer);
@@ -196,6 +225,81 @@ function clearRoomTimers(room: ServerRoom): void {
     clearTimeout(room.autoAdvanceTimer);
     room.autoAdvanceTimer = null;
   }
+}
+
+function clearAllRoomTimers(room: ServerRoom): void {
+  clearRoomTimers(room);
+  for (const player of room.players) {
+    clearPlayerAwayTimer(player);
+  }
+}
+
+function maybeRevealIfAllConnectedLocked(room: ServerRoom): boolean {
+  if (room.phase !== 'QUESTION') return false;
+  const connectedActive = getActivePlayers(room).filter((p) => p.connected);
+  if (
+    connectedActive.length > 0 &&
+    connectedActive.every((p) => room.currentPicks.has(p.id))
+  ) {
+    revealCurrentRound(room);
+    return true;
+  }
+  return false;
+}
+
+function kickParticipant(
+  room: ServerRoom,
+  targetPlayerId: string,
+  reason: 'host_kick' | 'away_timeout'
+): boolean {
+  const idx = room.players.findIndex(
+    (p) => p.id === targetPlayerId && p.role === 'participant'
+  );
+  if (idx === -1) return false;
+
+  const [target] = room.players.splice(idx, 1);
+  clearPlayerAwayTimer(target);
+  room.currentPicks.delete(target.id);
+
+  if (target.ws) {
+    socketMeta.delete(target.ws);
+    if (target.ws.readyState === WebSocket.OPEN) {
+      const msg =
+        reason === 'host_kick'
+          ? 'You were removed from the room by the Host.'
+          : 'You were removed from the room after being away too long.';
+      sendError(target.ws, msg, 'KICKED');
+      try {
+        target.ws.close();
+      } catch {
+        // ignore
+      }
+    }
+    target.ws = null;
+  }
+
+  const remainingActive = getActivePlayers(room);
+  if (
+    remainingActive.length === 0 &&
+    (room.phase === 'QUESTION' || room.phase === 'REVEAL')
+  ) {
+    clearRoomTimers(room);
+    room.phase = 'LOBBY';
+    room.currentQuestionIndex = 0;
+    room.currentPicks.clear();
+    room.currentReview = null;
+    room.history = [];
+    room.players.forEach(resetPlayerMatchStats);
+    broadcastSnapshot(room);
+    return true;
+  }
+
+  if (room.phase === 'QUESTION' && maybeRevealIfAllConnectedLocked(room)) {
+    return true;
+  }
+
+  broadcastSnapshot(room);
+  return true;
 }
 
 function startQuestionRound(room: ServerRoom): void {
@@ -252,11 +356,16 @@ function revealCurrentRound(room: ServerRoom): void {
   const q = room.activeQuestions[room.currentQuestionIndex];
   if (!q) return;
 
-  const timeLimitMs = room.settings.timeLimitSec * 1000;
   const picks: Record<string, RoundPickResult> = {};
   const participants = getParticipants(room);
+  for (const participant of participants) {
+    if (!participant.connected) {
+      participant.questionsMissedWhileAway += 1;
+    }
+  }
+  const activePlayers = getActivePlayers(room);
 
-  for (const player of participants) {
+  for (const player of activePlayers) {
     const pick = room.currentPicks.get(player.id);
     if (!pick) {
       player.streak = 0;
@@ -279,10 +388,9 @@ function revealCurrentRound(room: ServerRoom): void {
     player.totalResponseMs += pick.elapsedMs;
 
     if (isCorrect) {
-      const basePoints = 10;
-      const ratio = Math.max(0, Math.min(1, 1 - pick.elapsedMs / timeLimitMs));
-      const speedBonus = room.settings.speedBonusEnabled ? Math.round(5 * ratio) : 0;
-      const totalPoints = basePoints + speedBonus;
+      const basePoints = 1;
+      const speedBonus = 0;
+      const totalPoints = 1;
 
       player.score += totalPoints;
       player.correctCount += 1;
@@ -345,7 +453,15 @@ function revealCurrentRound(room: ServerRoom): void {
     });
   }
 
-  if (room.settings.autoAdvanceSec > 0) {
+  // Kick any away participant who has missed 3 questions while away
+  const timedOutAwayIds = participants
+    .filter((p) => !p.connected && p.questionsMissedWhileAway >= AWAY_MAX_MISSED_QUESTIONS)
+    .map((p) => p.id);
+  for (const awayId of timedOutAwayIds) {
+    kickParticipant(room, awayId, 'away_timeout');
+  }
+
+  if (room.settings.autoAdvanceSec > 0 && room.phase === 'REVEAL') {
     room.autoAdvanceTimer = setTimeout(() => {
       advanceToNextRound(room);
     }, room.settings.autoAdvanceSec * 1000);
@@ -418,16 +534,18 @@ function handleDisconnectOrLeave(ws: WebSocket, explicitLeave: boolean): void {
   if (player.ws !== ws) return;
 
   if (explicitLeave) {
+    clearPlayerAwayTimer(player);
     room.players.splice(idx, 1);
+    room.currentPicks.delete(player.id);
     if (room.players.length === 0) {
-      clearRoomTimers(room);
+      clearAllRoomTimers(room);
       rooms.delete(room.roomCode);
       return;
     }
-    // Only reset an active match if a playing participant leaves mid-duel;
-    // Host leaving/stepping away lets the two participants finish automatically.
+    const remainingActive = getActivePlayers(room);
+    // Reset an active match only if no active players remain; otherwise continue with remaining players
     if (
-      player.role === 'participant' &&
+      remainingActive.length === 0 &&
       (room.phase === 'QUESTION' || room.phase === 'REVEAL')
     ) {
       clearRoomTimers(room);
@@ -437,14 +555,31 @@ function handleDisconnectOrLeave(ws: WebSocket, explicitLeave: boolean): void {
       room.currentReview = null;
       room.history = [];
       room.players.forEach(resetPlayerMatchStats);
+    } else if (room.phase === 'QUESTION' && maybeRevealIfAllConnectedLocked(room)) {
+      return;
     }
     if (room.phase === 'LOBBY' && !room.players.some((p) => p.isHost)) {
       room.players[0].isHost = true;
+      room.players[0].role = 'host';
     }
     broadcastSnapshot(room);
   } else {
     player.connected = false;
     player.ws = null;
+    player.disconnectedAt = Date.now();
+    clearPlayerAwayTimer(player);
+
+    if (player.role === 'participant') {
+      player.awayKickTimer = setTimeout(() => {
+        if (!player.connected) {
+          kickParticipant(room, player.id, 'away_timeout');
+        }
+      }, AWAY_GRACE_MS);
+    }
+
+    if (room.phase === 'QUESTION' && maybeRevealIfAllConnectedLocked(room)) {
+      return;
+    }
     broadcastSnapshot(room);
   }
 }
@@ -454,7 +589,6 @@ async function startServer(): Promise<void> {
   app.use(express.json({ limit: '2mb' }));
 
   app.get('/api/health', (_req, res) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
     res.json({ ok: true, activeRooms: rooms.size });
   });
 
@@ -527,6 +661,9 @@ async function startServer(): Promise<void> {
           answeredCount: 0,
           readyForNext: false,
           ws,
+          disconnectedAt: null,
+          questionsMissedWhileAway: 0,
+          awayKickTimer: null,
         };
 
         const room: ServerRoom = {
@@ -534,9 +671,10 @@ async function startServer(): Promise<void> {
           phase: 'LOBBY',
           players: [host],
           settings: {
-            timeLimitSec: 30,
-            speedBonusEnabled: true,
-            autoAdvanceSec: 6,
+            hostMode: 'moderator',
+            timeLimitSec: 45,
+            speedBonusEnabled: false,
+            autoAdvanceSec: 4,
             allowGuestUpload: false,
             shuffleQuestions: true,
           },
@@ -586,6 +724,9 @@ async function startServer(): Promise<void> {
           }
           existing.ws = ws;
           existing.connected = true;
+          existing.disconnectedAt = null;
+          existing.questionsMissedWhileAway = 0;
+          clearPlayerAwayTimer(existing);
           if (msg.type === 'room:join' && msg.playerName.trim()) {
             existing.name = sanitizeName(msg.playerName);
           }
@@ -603,9 +744,9 @@ async function startServer(): Promise<void> {
           return;
         }
 
-        // Room capacity: 1 Host + 2 Participants
+        // Room capacity: 1 Host + 3 Participants
         const participants = getParticipants(room);
-        if (participants.length >= 2) {
+        if (participants.length >= 3) {
           const disconnectedParticipant = participants.find((p) => !p.connected);
           if (room.phase === 'LOBBY' && disconnectedParticipant) {
             const removeIdx = room.players.findIndex((p) => p.id === disconnectedParticipant.id);
@@ -615,7 +756,7 @@ async function startServer(): Promise<void> {
           } else {
             sendError(
               ws,
-              'This session already has 2 participants seated (1 Host + 2 Participants).',
+              'This session already has 3 participants seated (1 Host + 3 Participants).',
               'ROOM_FULL'
             );
             return;
@@ -638,6 +779,9 @@ async function startServer(): Promise<void> {
           answeredCount: 0,
           readyForNext: false,
           ws,
+          disconnectedAt: null,
+          questionsMissedWhileAway: 0,
+          awayKickTimer: null,
         };
 
         room.players.push(guest);
@@ -672,10 +816,25 @@ async function startServer(): Promise<void> {
         return;
       }
 
+      if (msg.type === 'room:kick') {
+        if (!sender.isHost) {
+          sendError(ws, 'Only the session Host can kick participants.');
+          return;
+        }
+        kickParticipant(room, msg.playerId, 'host_kick');
+        return;
+      }
+
       if (msg.type === 'room:update_settings') {
         if (!sender.isHost || room.phase !== 'LOBBY') return;
         const s = msg.settings;
-        if (typeof s.timeLimitSec === 'number' && [10, 15, 20, 30, 45, 60].includes(s.timeLimitSec)) {
+        if (s.hostMode === 'moderator' || s.hostMode === 'play_with' || s.hostMode === 'solo') {
+          room.settings.hostMode = s.hostMode;
+        }
+        if (
+          typeof s.timeLimitSec === 'number' &&
+          [10, 15, 20, 30, 45, 60, 75, 90].includes(s.timeLimitSec)
+        ) {
           room.settings.timeLimitSec = s.timeLimitSec;
         }
         if (typeof s.speedBonusEnabled === 'boolean') {
@@ -718,8 +877,11 @@ async function startServer(): Promise<void> {
       if (msg.type === 'match:start') {
         if (!sender.isHost || room.phase !== 'LOBBY') return;
         const connectedParticipants = getParticipants(room).filter((p) => p.connected);
-        if (connectedParticipants.length < 2) {
-          sendError(ws, 'Wait for both participants (2/2) to join before starting the session.');
+        if (room.settings.hostMode !== 'solo' && connectedParticipants.length < 1) {
+          sendError(
+            ws,
+            'Wait for at least 1 participant to join, or switch Host Mode to Play Solo.'
+          );
           return;
         }
         if (room.questions.length === 0) {
@@ -740,7 +902,7 @@ async function startServer(): Promise<void> {
 
       if (msg.type === 'answer:lock') {
         if (room.phase !== 'QUESTION') return;
-        if (sender.role !== 'participant') return;
+        if (!isActivePlayer(room, sender)) return;
         if (room.currentPicks.has(sender.id)) return;
         if (![0, 1, 2, 3].includes(msg.optionIndex)) return;
 
@@ -771,11 +933,8 @@ async function startServer(): Promise<void> {
           }
         }
 
-        // Instant simultaneous reveal the moment both participants lock in
-        const participants = getParticipants(room);
-        if (room.currentPicks.size >= participants.length) {
-          revealCurrentRound(room);
-        }
+        // Instant simultaneous reveal the moment all connected participants lock in
+        maybeRevealIfAllConnectedLocked(room);
         return;
       }
 
@@ -787,9 +946,9 @@ async function startServer(): Promise<void> {
         }
 
         sender.readyForNext = true;
-        const participants = getParticipants(room);
-        const allParticipantsReady = participants.every((p) => p.readyForNext || !p.connected);
-        if (allParticipantsReady) {
+        const activePlayers = getActivePlayers(room);
+        const allActiveReady = activePlayers.every((p) => p.readyForNext || !p.connected);
+        if (allActiveReady) {
           advanceToNextRound(room);
         } else {
           broadcastSnapshot(room);
@@ -848,7 +1007,7 @@ async function startServer(): Promise<void> {
     for (const [code, room] of rooms.entries()) {
       const anyConnected = room.players.some((p) => p.connected);
       if (!anyConnected && now - room.lastActivityAt > ROOM_IDLE_TTL_MS) {
-        clearRoomTimers(room);
+        clearAllRoomTimers(room);
         rooms.delete(code);
       }
     }

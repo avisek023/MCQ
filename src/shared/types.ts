@@ -22,7 +22,10 @@ export type MatchPhase = 'LOBBY' | 'QUESTION' | 'REVEAL' | 'MATCH_OVER';
 
 export type PlayerRole = 'host' | 'participant';
 
+export type HostMode = 'moderator' | 'play_with' | 'solo';
+
 export interface RoomSettings {
+  hostMode: HostMode;
   timeLimitSec: number;
   speedBonusEnabled: boolean;
   autoAdvanceSec: number; // 0 = manual advance
@@ -43,6 +46,7 @@ export interface PlayerInfo {
   totalResponseMs: number;
   answeredCount: number;
   readyForNext: boolean;
+  questionsMissedWhileAway?: number;
 }
 
 export interface RoundPickResult {
@@ -111,6 +115,7 @@ export type ClientMessage =
   | { type: 'room:join'; roomCode: string; playerName: string; playerToken: string }
   | { type: 'room:reconnect'; roomCode: string; playerToken: string }
   | { type: 'room:leave' }
+  | { type: 'room:kick'; playerId: string }
   | { type: 'room:update_settings'; settings: Partial<RoomSettings> }
   | { type: 'deck:update'; title: string; questions: Question[] }
   | { type: 'match:start' }

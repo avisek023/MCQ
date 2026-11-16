@@ -24,44 +24,6 @@ function getOrCreatePlayerToken(): string {
   }
 }
 
-function isKnownStaticHost(): boolean {
-  const host = window.location.hostname.toLowerCase();
-  return (
-    window.location.protocol === 'file:' ||
-    host.endsWith('.github.io') ||
-    host.endsWith('.gitlab.io') ||
-    host.endsWith('.pages.dev') ||
-    host.endsWith('.netlify.app') ||
-    host.endsWith('.vercel.app') ||
-    host.endsWith('.surge.sh')
-  );
-}
-
-function resolveConfiguredWsUrl(): string | null {
-  const configured = (import.meta.env.VITE_WS_URL as string | undefined)?.trim();
-  if (!configured) return null;
-
-  let normalized = configured;
-  if (normalized.startsWith('https://')) {
-    normalized = `wss://${normalized.slice('https://'.length)}`;
-  } else if (normalized.startsWith('http://')) {
-    normalized = `ws://${normalized.slice('http://'.length)}`;
-  } else if (!normalized.startsWith('ws://') && !normalized.startsWith('wss://')) {
-    const proto = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
-    normalized = `${proto}${normalized}`;
-  }
-
-  try {
-    const parsed = new URL(normalized);
-    if (!parsed.pathname || parsed.pathname === '/') {
-      parsed.pathname = '/ws';
-    }
-    return parsed.toString();
-  } catch {
-    return normalized;
-  }
-}
-
 export function useQuizSocket() {
   const [snapshot, setSnapshot] = useState<RoomSnapshot | null>(null);
   const [connected, setConnected] = useState(false);
@@ -70,8 +32,6 @@ export function useQuizSocket() {
   const [serverOffsetMs, setServerOffsetMs] = useState(0);
 
   const wsRef = useRef<WebSocket | null>(null);
-  const staticRelayRef = useRef<import('../static/staticRoomRelay').StaticRoomRelay | null>(null);
-  const wsVerifiedRef = useRef(false);
   const tokenRef = useRef<string>(getOrCreatePlayerToken());
   const snapshotRef = useRef<RoomSnapshot | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
@@ -81,11 +41,18 @@ export function useQuizSocket() {
 
   const handleServerMessage = useCallback((msg: ServerMessage) => {
     if (msg.type === 'room:error') {
-      if (msg.code === 'SESSION_EXPIRED' || msg.code === 'ROOM_NOT_FOUND') {
+      if (
+        msg.code === 'SESSION_EXPIRED' ||
+        msg.code === 'ROOM_NOT_FOUND' ||
+        msg.code === 'KICKED'
+      ) {
         try {
           sessionStorage.removeItem(ROOM_STORAGE_KEY);
         } catch {
           // ignore
+        }
+        if (msg.code === 'KICKED') {
+          setSnapshot(null);
         }
         if (msg.code === 'SESSION_EXPIRED') {
           return;
@@ -214,29 +181,7 @@ export function useQuizSocket() {
     }
   }, []);
 
-  const startStaticRelay = useCallback(async () => {
-    if (staticRelayRef.current || intentionalCloseRef.current) return;
-    setConnecting(true);
-    const { StaticRoomRelay } = await import('../static/staticRoomRelay');
-    if (staticRelayRef.current || intentionalCloseRef.current) return;
-
-    const relay = new StaticRoomRelay(
-      tokenRef.current,
-      handleServerMessage,
-      (isConn, isConnecting) => {
-        setConnected(isConn);
-        setConnecting(isConnecting);
-      }
-    );
-    staticRelayRef.current = relay;
-    relay.connect();
-  }, [handleServerMessage]);
-
   const send = useCallback((msg: ClientMessage) => {
-    if (staticRelayRef.current) {
-      void staticRelayRef.current.send(msg);
-      return;
-    }
     const ws = wsRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(msg));
@@ -246,13 +191,6 @@ export function useQuizSocket() {
   }, []);
 
   const connect = useCallback(() => {
-    const configuredWsUrl = resolveConfiguredWsUrl();
-
-    if (!configuredWsUrl && isKnownStaticHost()) {
-      void startStaticRelay();
-      return;
-    }
-
     if (
       wsRef.current &&
       (wsRef.current.readyState === WebSocket.OPEN ||
@@ -261,15 +199,12 @@ export function useQuizSocket() {
       return;
     }
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = configuredWsUrl || `${protocol}//${window.location.host}/ws`;
-
     setConnecting(true);
-    const ws = new WebSocket(wsUrl);
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
     wsRef.current = ws;
 
     ws.onopen = () => {
-      wsVerifiedRef.current = true;
       setConnected(true);
       setConnecting(false);
       setError(null);
@@ -306,19 +241,13 @@ export function useQuizSocket() {
     ws.onclose = () => {
       setConnected(false);
       setConnecting(false);
-      if (intentionalCloseRef.current) return;
-
-      // If no configured backend URL and the initial /ws probe failed, run zero-config static mode
-      if (!configuredWsUrl && !wsVerifiedRef.current) {
-        void startStaticRelay();
-        return;
+      if (!intentionalCloseRef.current) {
+        reconnectTimerRef.current = window.setTimeout(() => {
+          connect();
+        }, 1200);
       }
-
-      reconnectTimerRef.current = window.setTimeout(() => {
-        connect();
-      }, 1200);
     };
-  }, [handleServerMessage, startStaticRelay]);
+  }, [handleServerMessage]);
 
   useEffect(() => {
     intentionalCloseRef.current = false;
@@ -326,7 +255,6 @@ export function useQuizSocket() {
 
     const handleWakeReconnect = () => {
       if (document.visibilityState === 'visible') {
-        if (staticRelayRef.current) return;
         const ws = wsRef.current;
         if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
           if (reconnectTimerRef.current) {
@@ -349,8 +277,6 @@ export function useQuizSocket() {
         clearTimeout(reconnectTimerRef.current);
       }
       wsRef.current?.close();
-      staticRelayRef.current?.destroy();
-      staticRelayRef.current = null;
     };
   }, [connect]);
 
@@ -434,6 +360,13 @@ export function useQuizSocket() {
     [send]
   );
 
+  const kickPlayer = useCallback(
+    (playerId: string) => {
+      send({ type: 'room:kick', playerId });
+    },
+    [send]
+  );
+
   const clearError = useCallback(() => setError(null), []);
 
   return {
@@ -446,6 +379,7 @@ export function useQuizSocket() {
     createRoom,
     joinRoom,
     leaveRoom,
+    kickPlayer,
     updateSettings,
     updateDeck,
     startMatch,

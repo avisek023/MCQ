@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Award, Check, Crown, Flame, RotateCcw, Upload, Volume2, X } from 'lucide-react';
+import { Award, Check, Crown, RotateCcw, Upload, Volume2, X } from 'lucide-react';
 import { OPTION_LETTERS, PlayerInfo, RoomSnapshot } from '../shared/types';
 import { soundEngine } from '../utils/sound';
 import { RoomChat } from './RoomChat';
@@ -30,33 +30,54 @@ export const PodiumReviewView: React.FC<PodiumReviewViewProps> = ({
 }) => {
   const [filter, setFilter] = useState<'all' | 'disagreements' | 'missed'>('all');
 
-  const participants = useMemo(
-    () => snapshot.players.filter((p) => p.role === 'participant'),
-    [snapshot.players]
-  );
+  const hostMode = snapshot.settings.hostMode ?? 'moderator';
+
+  const activePlayers = useMemo(() => {
+    if (hostMode === 'solo') return snapshot.players.filter((p) => p.isHost);
+    if (hostMode === 'play_with') return snapshot.players;
+    return snapshot.players.filter((p) => p.role === 'participant');
+  }, [snapshot.players, hostMode]);
 
   const sortedPlayers = useMemo(() => {
-    return [...participants].sort((a, b) => {
+    return [...activePlayers].sort((a, b) => {
       if (b.score !== a.score) return b.score - a.score;
       if (b.correctCount !== a.correctCount) return b.correctCount - a.correctCount;
       const avgA = a.answeredCount ? a.totalResponseMs / a.answeredCount : Infinity;
       const avgB = b.answeredCount ? b.totalResponseMs / b.answeredCount : Infinity;
       return avgA - avgB;
     });
-  }, [participants]);
+  }, [activePlayers]);
 
   const first = sortedPlayers[0];
-  const second = sortedPlayers[1];
-  const isTie = Boolean(
-    first && second && first.score === second.score && first.correctCount === second.correctCount
-  );
+  const topScore = first?.score ?? 0;
+  const tiedWinners = sortedPlayers.filter((p) => p.score === topScore);
+  const isTie = tiedWinners.length > 1;
+
+  const podiumHeadline =
+    sortedPlayers.length <= 1
+      ? `${first?.name ?? 'Solo Player'} Completed the Session!`
+      : isTie && tiedWinners.length === sortedPlayers.length
+        ? `${sortedPlayers.length}-Way Tie! Everyone Shares 1st Place`
+        : isTie
+          ? `Tie! ${tiedWinners.map((w) => w.name).join(' & ')} Share 1st Place`
+          : `${first?.name ?? 'Champion'} Takes the Crown!`;
+
+  const podiumGridClass =
+    sortedPlayers.length <= 1
+      ? 'md:grid-cols-1 max-w-md'
+      : sortedPlayers.length === 2
+        ? 'md:grid-cols-2 max-w-3xl'
+        : sortedPlayers.length === 3
+          ? 'md:grid-cols-3 max-w-4xl'
+          : 'md:grid-cols-2 lg:grid-cols-4 max-w-5xl';
 
   const filteredHistory = useMemo(() => {
     return snapshot.history.filter((round) => {
       const picks = Object.values(round.picks);
       if (filter === 'disagreements') {
         if (picks.length < 2) return false;
-        return picks[0].optionIndex !== picks[1].optionIndex;
+        const distinctChoices = new Set(picks.map((p) => p.optionIndex));
+        return distinctChoices.size > 1;
       }
       if (filter === 'missed') {
         return picks.some((p) => !p.isCorrect);
@@ -73,7 +94,7 @@ export const PodiumReviewView: React.FC<PodiumReviewViewProps> = ({
   return (
     <main className="mx-auto max-w-5xl px-4 sm:px-6 py-6 sm:py-10">
       {/* Winner Podium with Fanfare */}
-      <section className="relative overflow-hidden rounded-2xl border border-amber-400/30 bg-[#131D33] p-5 sm:p-10 mb-8 sm:mb-10">
+      <section className="relative overflow-hidden rounded-2xl border border-amber-400/50 dark:border-amber-400/30 bg-slate-50 dark:bg-[#131D33] p-5 sm:p-10 mb-8 sm:mb-10">
         {/* Confetti burst */}
         <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 h-56 overflow-hidden">
           {CONFETTI_PIECES.map((piece, idx) => (
@@ -86,22 +107,20 @@ export const PodiumReviewView: React.FC<PodiumReviewViewProps> = ({
         </div>
 
         <div className="relative z-10 flex flex-col items-center text-center mb-6 sm:mb-8">
-          <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-xl border border-amber-400/40 bg-amber-500/15 text-amber-300">
+          <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-xl border border-amber-400/50 dark:border-amber-400/40 bg-amber-100 dark:bg-amber-500/15 text-amber-600 dark:text-amber-300">
             <Crown className="h-6 w-6" />
           </div>
-          <p className="text-xs font-medium text-amber-400 mb-1">
+          <p className="text-xs font-semibold text-amber-600 dark:text-amber-400 mb-1">
             Final Match Standings · {snapshot.totalQuestions} Questions
           </p>
-          <h1 className="font-display text-2xl sm:text-4xl font-bold text-white tracking-tight">
-            {isTie
-              ? `Deadlock! ${first?.name} & ${second?.name} Tie`
-              : `${first?.name ?? 'Champion'} Takes the Crown!`}
+          <h1 className="font-display text-2xl sm:text-4xl font-bold text-slate-900 dark:text-white tracking-tight">
+            {podiumHeadline}
           </h1>
 
           <button
             type="button"
             onClick={() => soundEngine.playVictoryFanfare()}
-            className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-slate-300 hover:text-amber-300 transition-colors cursor-pointer"
+            className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-slate-600 hover:text-amber-600 dark:text-slate-300 dark:hover:text-amber-300 transition-colors cursor-pointer"
           >
             <Volume2 className="h-3.5 w-3.5" />
             Replay Victory Fanfare
@@ -109,88 +128,78 @@ export const PodiumReviewView: React.FC<PodiumReviewViewProps> = ({
         </div>
 
         {/* Podium Cards */}
-        <div className="relative z-10 grid grid-cols-1 md:grid-cols-2 gap-6 items-end max-w-3xl mx-auto mb-8">
-          {/* 1st Place */}
-          {first && (
-            <div className="rounded-xl border border-amber-400/50 bg-[#0B1221] p-6">
-              <div className="flex items-center justify-between mb-4">
-                <span className="inline-flex items-center gap-1.5 text-xs font-bold text-amber-400">
-                  <Crown className="h-4 w-4" />
-                  {isTie ? 'Co-Champion' : '1st Place'}
-                </span>
-                {first.id === snapshot.selfId && (
-                  <span className="text-xs text-sky-400 font-medium">You</span>
-                )}
-              </div>
-              <div className="font-display text-2xl font-bold text-white mb-1">{first.name}</div>
-              <div className="font-mono-tabular text-3xl font-bold text-amber-400 mb-5">
-                {first.score} pts
-              </div>
+        <div className={`relative z-10 grid grid-cols-1 gap-4 sm:gap-5 mx-auto mb-8 ${podiumGridClass}`}>
+          {sortedPlayers.map((player, rankIdx) => {
+            const isSharedFirst = isTie && player.score === topScore;
+            const isFirstCard = rankIdx === 0 || isSharedFirst;
+            const rankLabels = ['1st Place', '2nd Place', '3rd Place', '4th Place'];
+            const rankLabel =
+              sortedPlayers.length <= 1
+                ? 'Solo Score'
+                : isSharedFirst
+                  ? 'Co-Champion'
+                  : rankLabels[rankIdx] ?? `#${rankIdx + 1}`;
 
-              <div className="grid grid-cols-3 gap-2 border-t border-white/10 pt-4 text-xs">
-                <div>
-                  <div className="text-slate-400">Accuracy</div>
-                  <div className="font-mono-tabular font-semibold text-white mt-0.5">
-                    {first.correctCount}/{snapshot.totalQuestions}
-                  </div>
+            return (
+              <div
+                key={player.id}
+                className={`rounded-xl border bg-white dark:bg-[#0B1221] p-5 sm:p-6 ${
+                  isFirstCard
+                    ? 'border-amber-400 dark:border-amber-400/55 shadow-sm dark:shadow-none'
+                    : 'border-slate-200 dark:border-white/15'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-3.5">
+                  <span
+                    className={`inline-flex items-center gap-1.5 text-xs font-bold ${
+                      isFirstCard
+                        ? 'text-amber-600 dark:text-amber-400'
+                        : 'text-slate-600 dark:text-slate-300'
+                    }`}
+                  >
+                    {isFirstCard ? (
+                      <Crown className="h-4 w-4 text-amber-500 dark:text-amber-400" />
+                    ) : (
+                      <Award className="h-4 w-4 text-slate-400" />
+                    )}
+                    {rankLabel}
+                  </span>
+                  {player.id === snapshot.selfId && (
+                    <span className="text-xs text-sky-600 dark:text-sky-400 font-semibold">
+                      You
+                    </span>
+                  )}
                 </div>
-                <div>
-                  <div className="text-slate-400">Best Streak</div>
-                  <div className="font-mono-tabular font-semibold text-white mt-0.5 inline-flex items-center gap-1">
-                    <Flame className="h-3.5 w-3.5 text-amber-400" />
-                    {first.bestStreak}
-                  </div>
+                <div className="font-display text-xl sm:text-2xl font-bold text-slate-900 dark:text-white mb-1 truncate">
+                  {player.name}
                 </div>
-                <div>
-                  <div className="text-slate-400">Avg Reflex</div>
-                  <div className="font-mono-tabular font-semibold text-white mt-0.5">
-                    {formatAvgTime(first)}
-                  </div>
+                <div
+                  className={`font-mono-tabular text-3xl font-bold mb-4 ${
+                    isFirstCard
+                      ? 'text-amber-600 dark:text-amber-400'
+                      : 'text-slate-800 dark:text-slate-200'
+                  }`}
+                >
+                  {player.score} {player.score === 1 ? 'pt' : 'pts'}
                 </div>
-              </div>
-            </div>
-          )}
 
-          {/* 2nd Place */}
-          {second && (
-            <div className="rounded-xl border border-white/15 bg-[#0B1221] p-6">
-              <div className="flex items-center justify-between mb-4">
-                <span className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-300">
-                  <Award className="h-4 w-4 text-slate-400" />
-                  {isTie ? 'Co-Champion' : '2nd Place'}
-                </span>
-                {second.id === snapshot.selfId && (
-                  <span className="text-xs text-sky-400 font-medium">You</span>
-                )}
-              </div>
-              <div className="font-display text-2xl font-bold text-white mb-1">{second.name}</div>
-              <div className="font-mono-tabular text-3xl font-bold text-slate-200 mb-5">
-                {second.score} pts
-              </div>
-
-              <div className="grid grid-cols-3 gap-2 border-t border-white/10 pt-4 text-xs">
-                <div>
-                  <div className="text-slate-400">Accuracy</div>
-                  <div className="font-mono-tabular font-semibold text-white mt-0.5">
-                    {second.correctCount}/{snapshot.totalQuestions}
+                <div className="grid grid-cols-2 gap-3 border-t border-slate-200 dark:border-white/10 pt-3.5 text-xs">
+                  <div>
+                    <div className="text-slate-500 dark:text-slate-400">Correct</div>
+                    <div className="font-mono-tabular font-semibold text-slate-900 dark:text-white mt-0.5">
+                      {player.correctCount}/{snapshot.totalQuestions}
+                    </div>
                   </div>
-                </div>
-                <div>
-                  <div className="text-slate-400">Best Streak</div>
-                  <div className="font-mono-tabular font-semibold text-white mt-0.5 inline-flex items-center gap-1">
-                    <Flame className="h-3.5 w-3.5 text-amber-400" />
-                    {second.bestStreak}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-slate-400">Avg Reflex</div>
-                  <div className="font-mono-tabular font-semibold text-white mt-0.5">
-                    {formatAvgTime(second)}
+                  <div>
+                    <div className="text-slate-500 dark:text-slate-400">Avg Time</div>
+                    <div className="font-mono-tabular font-semibold text-slate-900 dark:text-white mt-0.5">
+                      {formatAvgTime(player)}
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
-          )}
+            );
+          })}
         </div>
 
         {/* Rematch / Upload New Questions */}
@@ -200,7 +209,7 @@ export const PodiumReviewView: React.FC<PodiumReviewViewProps> = ({
           const canTriggerRematch = Boolean(self?.isHost) || !hostConnected;
           if (!canTriggerRematch) {
             return (
-              <p className="relative z-10 text-center text-xs text-slate-400">
+              <p className="relative z-10 text-center text-xs text-slate-500 dark:text-slate-400">
                 Waiting for the session Host to return to the lobby for another round.
               </p>
             );
@@ -218,9 +227,9 @@ export const PodiumReviewView: React.FC<PodiumReviewViewProps> = ({
               <button
                 type="button"
                 onClick={onRematch}
-                className="inline-flex items-center gap-2 rounded-lg border border-white/15 bg-[#0B1221] px-5 py-3 text-sm font-semibold text-white hover:border-white/30 transition-colors cursor-pointer"
+                className="inline-flex items-center gap-2 rounded-lg border border-slate-300 dark:border-white/15 bg-white dark:bg-[#0B1221] px-5 py-3 text-sm font-semibold text-slate-800 dark:text-white hover:border-slate-400 dark:hover:border-white/30 transition-colors cursor-pointer"
               >
-                <Upload className="h-4 w-4 text-amber-400" />
+                <Upload className="h-4 w-4 text-amber-600 dark:text-amber-400" />
                 <span>Upload New Questions</span>
               </button>
             </div>
@@ -243,15 +252,15 @@ export const PodiumReviewView: React.FC<PodiumReviewViewProps> = ({
       <section>
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
           <div>
-            <h2 className="font-display text-2xl font-bold text-white">
+            <h2 className="font-display text-2xl font-bold text-slate-900 dark:text-white">
               Question-by-Question Review
             </h2>
-            <p className="text-sm text-slate-400">
-              Compare both players’ choices and reaction speed against the official answer.
+            <p className="text-sm text-slate-600 dark:text-slate-400">
+              Compare choices against the official answer.
             </p>
           </div>
 
-          <div className="inline-flex items-center gap-1 rounded-lg bg-[#131D33] p-1 border border-white/10 self-start">
+          <div className="inline-flex items-center gap-1 rounded-lg bg-slate-100 dark:bg-[#131D33] p-1 border border-slate-200 dark:border-white/10 self-start">
             {[
               { id: 'all', label: `All (${snapshot.history.length})` },
               { id: 'disagreements', label: 'Different Picks' },
@@ -264,7 +273,7 @@ export const PodiumReviewView: React.FC<PodiumReviewViewProps> = ({
                 className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                   filter === tab.id
                     ? 'bg-amber-500 text-slate-950'
-                    : 'text-slate-300 hover:text-white'
+                    : 'text-slate-600 hover:text-slate-950 dark:text-slate-300 dark:hover:text-white'
                 }`}
               >
                 {tab.label}
@@ -274,34 +283,29 @@ export const PodiumReviewView: React.FC<PodiumReviewViewProps> = ({
         </div>
 
         {filteredHistory.length === 0 ? (
-          <div className="rounded-xl border border-white/10 bg-[#131D33] p-8 text-center text-sm text-slate-400">
+          <div className="rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-[#131D33] p-8 text-center text-sm text-slate-500 dark:text-slate-400">
             No questions match this filter.
           </div>
         ) : (
           <div className="space-y-5">
             {filteredHistory.map((round) => {
-              const p1 = participants[0];
-              const p2 = participants[1];
-              const pick1 = p1 ? round.picks[p1.id] : undefined;
-              const pick2 = p2 ? round.picks[p2.id] : undefined;
-
               return (
                 <article
                   key={round.questionId + round.questionIndex}
-                  className="rounded-xl border border-white/10 bg-[#131D33] p-6"
+                  className="rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-[#131D33] p-5 sm:p-6"
                 >
-                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400 mb-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400 mb-2">
                     <span>
                       Question {round.questionIndex + 1}
                       {round.topic ? ` · ${round.topic}` : ''}
                     </span>
-                    <span className="font-medium text-emerald-400">
+                    <span className="font-medium text-emerald-700 dark:text-emerald-400">
                       Official Answer: {OPTION_LETTERS[round.correctIndex]}.{' '}
                       {round.options[round.correctIndex]}
                     </span>
                   </div>
 
-                  <h3 className="font-display text-lg font-semibold text-white mb-4">
+                  <h3 className="font-display text-lg font-semibold text-slate-900 dark:text-white mb-4">
                     {round.question}
                   </h3>
 
@@ -309,14 +313,18 @@ export const PodiumReviewView: React.FC<PodiumReviewViewProps> = ({
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 mb-4">
                     {round.options.map((optText, idx) => {
                       const isCorrect = idx === round.correctIndex;
-                      const p1Chose = pick1?.optionIndex === idx;
-                      const p2Chose = pick2?.optionIndex === idx;
+                      const pickedBy = activePlayers.filter(
+                        (p) => round.picks[p.id]?.optionIndex === idx
+                      );
 
-                      let cls = 'border-white/10 bg-[#0B1221] text-slate-300';
+                      let cls =
+                        'border-slate-200 dark:border-white/10 bg-white dark:bg-[#0B1221] text-slate-700 dark:text-slate-300';
                       if (isCorrect) {
-                        cls = 'border-emerald-500/60 bg-emerald-500/15 text-emerald-100';
-                      } else if (p1Chose || p2Chose) {
-                        cls = 'border-red-500/50 bg-red-500/15 text-red-100';
+                        cls =
+                          'border-emerald-500/60 bg-emerald-50 dark:bg-emerald-500/15 text-emerald-950 dark:text-emerald-100';
+                      } else if (pickedBy.length > 0) {
+                        cls =
+                          'border-red-400/60 dark:border-red-500/50 bg-red-50 dark:bg-red-500/15 text-red-900 dark:text-red-100';
                       }
 
                       return (
@@ -326,11 +334,11 @@ export const PodiumReviewView: React.FC<PodiumReviewViewProps> = ({
                         >
                           <span className="flex items-center gap-2 min-w-0">
                             {isCorrect ? (
-                              <Check className="h-4 w-4 text-emerald-400 shrink-0" />
-                            ) : p1Chose || p2Chose ? (
-                              <X className="h-4 w-4 text-red-400 shrink-0" />
+                              <Check className="h-4 w-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                            ) : pickedBy.length > 0 ? (
+                              <X className="h-4 w-4 text-red-600 dark:text-red-400 shrink-0" />
                             ) : (
-                              <span className="font-mono-tabular text-xs font-bold text-slate-500 w-4 text-center shrink-0">
+                              <span className="font-mono-tabular text-xs font-bold text-slate-400 dark:text-slate-500 w-4 text-center shrink-0">
                                 {OPTION_LETTERS[idx]}
                               </span>
                             )}
@@ -339,13 +347,10 @@ export const PodiumReviewView: React.FC<PodiumReviewViewProps> = ({
                             </span>
                           </span>
 
-                          {(p1Chose || p2Chose) && (
-                            <span className="text-xs font-medium shrink-0 text-slate-200">
-                              {[
-                                p1Chose ? (p1.id === snapshot.selfId ? 'You' : p1.name) : null,
-                                p2Chose ? (p2.id === snapshot.selfId ? 'You' : p2.name) : null,
-                              ]
-                                .filter(Boolean)
+                          {pickedBy.length > 0 && (
+                            <span className="text-xs font-medium shrink-0 text-slate-700 dark:text-slate-200">
+                              {pickedBy
+                                .map((p) => (p.id === snapshot.selfId ? 'You' : p.name))
                                 .join(' · ')}
                             </span>
                           )}
@@ -355,47 +360,48 @@ export const PodiumReviewView: React.FC<PodiumReviewViewProps> = ({
                   </div>
 
                   {/* Player Comparison Row */}
-                  <div className="flex flex-wrap items-center justify-between gap-4 border-t border-white/10 pt-3.5 text-xs text-slate-300">
-                    <div className="flex flex-wrap items-center gap-5">
-                      {[
-                        { player: p1, pick: pick1 },
-                        { player: p2, pick: pick2 },
-                      ].map(
-                        (entry, idx) =>
-                          entry.player &&
-                          entry.pick && (
-                            <span key={idx} className="flex items-center gap-1.5">
-                              <strong className="text-white">
-                                {entry.player.id === snapshot.selfId
-                                  ? `${entry.player.name} (You)`
-                                  : entry.player.name}
-                                :
-                              </strong>
-                              <span
-                                className={
-                                  entry.pick.isCorrect ? 'text-emerald-400' : 'text-red-400'
-                                }
-                              >
-                                {entry.pick.optionIndex !== null
-                                  ? OPTION_LETTERS[entry.pick.optionIndex]
-                                  : 'Timed Out'}
-                              </span>
-                              <span className="font-mono-tabular text-slate-400">
-                                (
-                                {entry.pick.elapsedMs !== null
-                                  ? `${(entry.pick.elapsedMs / 1000).toFixed(1)}s`
-                                  : '—'}
-                                , +{entry.pick.totalPoints} pts)
-                              </span>
+                  <div className="flex flex-wrap items-center justify-between gap-4 border-t border-slate-200 dark:border-white/10 pt-3.5 text-xs text-slate-600 dark:text-slate-300">
+                    <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+                      {activePlayers.map((player) => {
+                        const pick = round.picks[player.id];
+                        if (!pick) return null;
+                        return (
+                          <span key={player.id} className="flex items-center gap-1.5">
+                            <strong className="text-slate-900 dark:text-white">
+                              {player.id === snapshot.selfId
+                                ? `${player.name} (You)`
+                                : player.name}
+                              :
+                            </strong>
+                            <span
+                              className={
+                                pick.isCorrect
+                                  ? 'font-semibold text-emerald-700 dark:text-emerald-400'
+                                  : 'font-semibold text-red-600 dark:text-red-400'
+                              }
+                            >
+                              {pick.optionIndex !== null
+                                ? OPTION_LETTERS[pick.optionIndex]
+                                : 'Timed Out'}
                             </span>
-                          )
-                      )}
+                            <span className="font-mono-tabular text-slate-500 dark:text-slate-400">
+                              (
+                              {pick.elapsedMs !== null
+                                ? `${(pick.elapsedMs / 1000).toFixed(1)}s`
+                                : '—'}
+                              , {pick.totalPoints > 0 ? `+${pick.totalPoints} pt` : '0 pts'})
+                            </span>
+                          </span>
+                        );
+                      })}
                     </div>
                   </div>
 
                   {round.explanation && (
-                    <p className="mt-3 text-xs text-slate-400 leading-relaxed">
-                      <span className="font-semibold text-slate-200">Note: </span>
+                    <p className="mt-3 text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                      <span className="font-semibold text-slate-800 dark:text-slate-200">
+                        Note:{' '}
+                      </span>
                       {round.explanation}
                     </p>
                   )}

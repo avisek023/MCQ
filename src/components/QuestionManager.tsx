@@ -188,23 +188,29 @@ export const QuestionManager: React.FC<QuestionManagerProps> = ({
 
   if (!canEdit) {
     return (
-      <section className="rounded-xl border border-white/10 bg-[#131D33] p-6">
+      <section className="rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-[#131D33] p-6">
         <div className="flex items-start justify-between gap-4 mb-4">
           <div>
-            <p className="text-xs font-medium text-slate-400 mb-1">Active Question Deck</p>
-            <h2 className="font-display text-xl font-bold text-white">{deckSummary.title}</h2>
+            <p className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
+              Active Question Deck
+            </p>
+            <h2 className="font-display text-xl font-bold text-slate-900 dark:text-white">
+              {deckSummary.title}
+            </h2>
           </div>
           <Lock className="h-5 w-5 text-slate-400 shrink-0" />
         </div>
 
-        <p className="text-sm text-slate-300 mb-5">
-          <span className="font-mono-tabular font-semibold text-white">{deckSummary.count}</span>{' '}
+        <p className="text-sm text-slate-600 dark:text-slate-300 mb-5">
+          <span className="font-mono-tabular font-semibold text-slate-900 dark:text-white">
+            {deckSummary.count}
+          </span>{' '}
           questions loaded by {deckSummary.updatedBy}. Answers stay hidden until each round’s
           simultaneous reveal.
         </p>
 
         {deckSummary.topics.length > 0 && (
-          <div className="border-t border-white/10 pt-4 text-xs text-slate-400">
+          <div className="border-t border-slate-200 dark:border-white/10 pt-4 text-xs text-slate-500 dark:text-slate-400">
             Topics included: {deckSummary.topics.join(' · ')}
           </div>
         )}
@@ -213,17 +219,19 @@ export const QuestionManager: React.FC<QuestionManagerProps> = ({
   }
 
   return (
-    <section className="rounded-xl border border-white/10 bg-[#131D33] p-6">
+    <section className="rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-[#131D33] p-6">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-5">
         <div>
-          <p className="text-xs font-medium text-slate-400 mb-1">
+          <p className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
             Question Bank · <span className="font-mono-tabular">{deckSummary.count}</span>{' '}
             questions ready
           </p>
-          <h2 className="font-display text-xl font-bold text-white">{deckSummary.title}</h2>
+          <h2 className="font-display text-xl font-bold text-slate-900 dark:text-white">
+            {deckSummary.title}
+          </h2>
         </div>
 
-        <div className="inline-flex items-center gap-1 rounded-lg bg-[#0B1221] p-1 border border-white/5 self-start">
+        <div className="inline-flex items-center gap-1 rounded-lg bg-slate-200/80 dark:bg-[#0B1221] p-1 border border-slate-200 dark:border-white/5 self-start">
           <button
             type="button"
             onClick={() => {
@@ -231,7 +239,9 @@ export const QuestionManager: React.FC<QuestionManagerProps> = ({
               setUploadNotice(null);
             }}
             className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-              activeTab === 'deck' ? 'bg-amber-500 text-slate-950' : 'text-slate-300 hover:text-white'
+              activeTab === 'deck'
+                ? 'bg-amber-500 text-slate-950 shadow-xs'
+                : 'text-slate-700 hover:text-slate-950 dark:text-slate-300 dark:hover:text-white'
             }`}
           >
             Active Deck ({deckSummary.count})
@@ -244,8 +254,8 @@ export const QuestionManager: React.FC<QuestionManagerProps> = ({
             }}
             className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
               activeTab === 'upload'
-                ? 'bg-amber-500 text-slate-950'
-                : 'text-slate-300 hover:text-white'
+                ? 'bg-amber-500 text-slate-950 shadow-xs'
+                : 'text-slate-700 hover:text-slate-950 dark:text-slate-300 dark:hover:text-white'
             }`}
           >
             Upload / Paste
@@ -257,7 +267,9 @@ export const QuestionManager: React.FC<QuestionManagerProps> = ({
               setUploadNotice(null);
             }}
             className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-              activeTab === 'add' ? 'bg-amber-500 text-slate-950' : 'text-slate-300 hover:text-white'
+              activeTab === 'add'
+                ? 'bg-amber-500 text-slate-950 shadow-xs'
+                : 'text-slate-700 hover:text-slate-950 dark:text-slate-300 dark:hover:text-white'
             }`}
           >
             Add One
@@ -266,15 +278,15 @@ export const QuestionManager: React.FC<QuestionManagerProps> = ({
       </div>
 
       {uploadNotice && (
-        <div className="mb-4 flex items-center justify-between rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-2.5 text-xs text-emerald-200">
+        <div className="mb-4 flex items-center justify-between rounded-lg border border-emerald-400/60 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/10 px-4 py-2.5 text-xs text-emerald-800 dark:text-emerald-200">
           <span className="flex items-center gap-2">
-            <Check className="h-4 w-4 text-emerald-400 shrink-0" />
+            <Check className="h-4 w-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
             {uploadNotice}
           </span>
           <button
             type="button"
             onClick={() => setUploadNotice(null)}
-            className="text-emerald-300 hover:text-white cursor-pointer"
+            className="text-emerald-700 hover:text-emerald-950 dark:text-emerald-300 dark:hover:text-white cursor-pointer"
           >
             Dismiss
           </button>
@@ -287,11 +299,11 @@ export const QuestionManager: React.FC<QuestionManagerProps> = ({
             {currentQuestions.map((q, idx) => (
               <div
                 key={q.id}
-                className="flex items-start justify-between gap-4 rounded-lg border border-white/10 bg-[#0B1221] p-3.5"
+                className="flex items-start justify-between gap-4 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-[#0B1221] p-3.5"
               >
                 <div className="min-w-0">
-                  <div className="flex items-center gap-2 text-xs text-slate-400 mb-1">
-                    <span className="font-mono-tabular font-semibold text-slate-300">
+                  <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 mb-1">
+                    <span className="font-mono-tabular font-semibold text-slate-700 dark:text-slate-300">
                       Q{idx + 1}
                     </span>
                     {q.topic && (
@@ -301,17 +313,19 @@ export const QuestionManager: React.FC<QuestionManagerProps> = ({
                       </>
                     )}
                     <span aria-hidden="true">·</span>
-                    <span className="text-emerald-400">
+                    <span className="font-semibold text-emerald-700 dark:text-emerald-400">
                       Ans: {OPTION_LETTERS[q.correctIndex]}
                     </span>
                   </div>
-                  <p className="text-sm text-slate-100 leading-snug">{q.question}</p>
+                  <p className="text-sm text-slate-800 dark:text-slate-100 leading-snug">
+                    {q.question}
+                  </p>
                 </div>
                 <button
                   type="button"
                   onClick={() => handleDeleteQuestion(q.id)}
                   aria-label={`Remove question ${idx + 1}`}
-                  className="rounded p-1.5 text-slate-400 hover:bg-red-500/15 hover:text-red-300 transition-colors shrink-0 cursor-pointer"
+                  className="rounded p-1.5 text-slate-400 hover:bg-red-50 dark:hover:bg-red-500/15 hover:text-red-600 dark:hover:text-red-300 transition-colors shrink-0 cursor-pointer"
                 >
                   <Trash2 className="h-4 w-4" />
                 </button>
@@ -319,11 +333,11 @@ export const QuestionManager: React.FC<QuestionManagerProps> = ({
             ))}
           </div>
 
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-4">
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 dark:border-white/10 pt-4">
             <button
               type="button"
               onClick={handleResetStarter}
-              className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-300 hover:text-white cursor-pointer"
+              className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-600 hover:text-slate-950 dark:text-slate-300 dark:hover:text-white cursor-pointer"
             >
               <RotateCcw className="h-3.5 w-3.5" />
               Reset to Starter Pack
@@ -331,9 +345,9 @@ export const QuestionManager: React.FC<QuestionManagerProps> = ({
             <button
               type="button"
               onClick={() => setActiveTab('upload')}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-[#0B1221] px-3.5 py-2 text-xs font-semibold text-white hover:border-amber-400/50 transition-colors cursor-pointer"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 dark:border-white/15 bg-white dark:bg-[#0B1221] px-3.5 py-2 text-xs font-semibold text-slate-800 dark:text-white hover:border-amber-500/60 dark:hover:border-amber-400/50 transition-colors cursor-pointer"
             >
-              <Upload className="h-3.5 w-3.5 text-amber-400" />
+              <Upload className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
               Upload Custom MCQs
             </button>
           </div>
@@ -344,7 +358,10 @@ export const QuestionManager: React.FC<QuestionManagerProps> = ({
         <div className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label htmlFor="deck-title" className="block text-xs font-medium text-slate-300 mb-1.5">
+              <label
+                htmlFor="deck-title"
+                className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1.5"
+              >
                 Deck Title
               </label>
               <input
@@ -354,7 +371,7 @@ export const QuestionManager: React.FC<QuestionManagerProps> = ({
                 value={deckTitleInput}
                 onChange={(e) => setDeckTitleInput(e.target.value)}
                 placeholder="e.g. Biology Midterm Review"
-                className="w-full rounded-lg border border-white/15 bg-[#0B1221] px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-amber-400 focus:outline-none"
+                className="w-full rounded-lg border border-slate-300 dark:border-white/15 bg-white dark:bg-[#0B1221] px-3 py-2 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:border-amber-500 dark:focus:border-amber-400 focus:outline-none"
               />
             </div>
 
@@ -369,16 +386,16 @@ export const QuestionManager: React.FC<QuestionManagerProps> = ({
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
-                className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg border border-white/15 bg-[#0B1221] px-3.5 py-2 text-xs font-semibold text-white hover:border-amber-400/60 transition-colors cursor-pointer"
+                className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg border border-slate-300 dark:border-white/15 bg-white dark:bg-[#0B1221] px-3.5 py-2 text-xs font-semibold text-slate-800 dark:text-white hover:border-amber-500/60 dark:hover:border-amber-400/60 transition-colors cursor-pointer"
               >
-                <Upload className="h-4 w-4 text-amber-400" />
+                <Upload className="h-4 w-4 text-amber-600 dark:text-amber-400" />
                 Choose File (.json, .csv, .txt)
               </button>
               <button
                 type="button"
                 onClick={handleDownloadTemplate}
                 title="Download sample JSON template"
-                className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-white/15 bg-[#0B1221] px-3 py-2 text-xs font-medium text-slate-300 hover:text-white transition-colors cursor-pointer"
+                className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-300 dark:border-white/15 bg-white dark:bg-[#0B1221] px-3 py-2 text-xs font-medium text-slate-700 dark:text-slate-300 hover:text-slate-950 dark:hover:text-white transition-colors cursor-pointer"
               >
                 <Download className="h-4 w-4" />
                 Template
@@ -388,28 +405,31 @@ export const QuestionManager: React.FC<QuestionManagerProps> = ({
 
           <div>
             <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
-              <label htmlFor="paste-questions" className="text-xs font-medium text-slate-300">
+              <label
+                htmlFor="paste-questions"
+                className="text-xs font-medium text-slate-700 dark:text-slate-300"
+              >
                 Paste JSON, CSV, or A/B/C/D Text
               </label>
               <div className="flex items-center gap-3 text-xs">
                 <button
                   type="button"
                   onClick={() => setRawPaste(SAMPLE_TEXT)}
-                  className="text-sky-400 hover:text-sky-300 cursor-pointer"
+                  className="text-sky-600 hover:text-sky-700 dark:text-sky-400 dark:hover:text-sky-300 cursor-pointer"
                 >
                   Load Text Example
                 </button>
                 <button
                   type="button"
                   onClick={() => setRawPaste(SAMPLE_CSV)}
-                  className="text-sky-400 hover:text-sky-300 cursor-pointer"
+                  className="text-sky-600 hover:text-sky-700 dark:text-sky-400 dark:hover:text-sky-300 cursor-pointer"
                 >
                   Load CSV Example
                 </button>
                 <button
                   type="button"
                   onClick={() => setRawPaste(SAMPLE_JSON)}
-                  className="text-sky-400 hover:text-sky-300 cursor-pointer"
+                  className="text-sky-600 hover:text-sky-700 dark:text-sky-400 dark:hover:text-sky-300 cursor-pointer"
                 >
                   Load JSON Example
                 </button>
@@ -421,24 +441,24 @@ export const QuestionManager: React.FC<QuestionManagerProps> = ({
               value={rawPaste}
               onChange={(e) => setRawPaste(e.target.value)}
               placeholder={`Paste questions in any format:\n\nWhat is 2 + 2?\nA) 3\nB) 4\nC) 5\nD) 6\nAnswer: B`}
-              className="font-mono-tabular w-full rounded-lg border border-white/15 bg-[#0B1221] p-3 text-xs text-slate-100 placeholder:text-slate-500 focus:border-amber-400 focus:outline-none leading-relaxed"
+              className="font-mono-tabular w-full rounded-lg border border-slate-300 dark:border-white/15 bg-white dark:bg-[#0B1221] p-3 text-xs text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:border-amber-500 dark:focus:border-amber-400 focus:outline-none leading-relaxed"
             />
           </div>
 
           {parsedPreview && (
-            <div className="rounded-lg border border-white/10 bg-[#0B1221] p-3.5 text-xs">
-              <div className="flex items-center justify-between text-slate-200 mb-1">
+            <div className="rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-[#0B1221] p-3.5 text-xs">
+              <div className="flex items-center justify-between text-slate-800 dark:text-slate-200 mb-1">
                 <span className="flex items-center gap-1.5 font-medium">
-                  <FileText className="h-3.5 w-3.5 text-sky-400" />
+                  <FileText className="h-3.5 w-3.5 text-sky-600 dark:text-sky-400" />
                   Detected {parsedPreview.formatDetected.toUpperCase()} ·{' '}
-                  <span className="font-mono-tabular text-emerald-400">
+                  <span className="font-mono-tabular font-semibold text-emerald-700 dark:text-emerald-400">
                     {parsedPreview.questions.length} valid question
                     {parsedPreview.questions.length === 1 ? '' : 's'}
                   </span>
                 </span>
               </div>
               {parsedPreview.errors.length > 0 && (
-                <ul className="mt-2 space-y-1 text-red-300">
+                <ul className="mt-2 space-y-1 text-red-600 dark:text-red-300">
                   {parsedPreview.errors.slice(0, 4).map((err, i) => (
                     <li key={i}>{err}</li>
                   ))}
@@ -455,7 +475,7 @@ export const QuestionManager: React.FC<QuestionManagerProps> = ({
               type="button"
               disabled={!parsedPreview || parsedPreview.questions.length === 0}
               onClick={() => handleApplyUpload('append')}
-              className="rounded-lg border border-white/15 bg-[#0B1221] px-4 py-2 text-xs font-semibold text-white hover:border-white/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer"
+              className="rounded-lg border border-slate-300 dark:border-white/15 bg-white dark:bg-[#0B1221] px-4 py-2 text-xs font-semibold text-slate-800 dark:text-white hover:border-slate-400 dark:hover:border-white/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer"
             >
               Append to Current Deck
             </button>
@@ -474,7 +494,10 @@ export const QuestionManager: React.FC<QuestionManagerProps> = ({
       {activeTab === 'add' && (
         <form onSubmit={handleAddSingle} className="space-y-3.5">
           <div>
-            <label htmlFor="single-q" className="block text-xs font-medium text-slate-300 mb-1">
+            <label
+              htmlFor="single-q"
+              className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1"
+            >
               Question Prompt
             </label>
             <textarea
@@ -483,7 +506,7 @@ export const QuestionManager: React.FC<QuestionManagerProps> = ({
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               placeholder="Enter your multiple-choice question..."
-              className="w-full rounded-lg border border-white/15 bg-[#0B1221] px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-amber-400 focus:outline-none"
+              className="w-full rounded-lg border border-slate-300 dark:border-white/15 bg-white dark:bg-[#0B1221] px-3 py-2 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:border-amber-500 dark:focus:border-amber-400 focus:outline-none"
             />
           </div>
 
@@ -501,8 +524,8 @@ export const QuestionManager: React.FC<QuestionManagerProps> = ({
                   aria-label={`Mark ${item.label} as correct answer`}
                   className={`h-9 w-9 rounded-lg border text-xs font-bold shrink-0 transition-colors cursor-pointer ${
                     correctIdx === item.idx
-                      ? 'border-emerald-400 bg-emerald-500/20 text-emerald-300'
-                      : 'border-white/15 bg-[#0B1221] text-slate-400 hover:text-white'
+                      ? 'border-emerald-500 dark:border-emerald-400 bg-emerald-50 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300'
+                      : 'border-slate-300 dark:border-white/15 bg-white dark:bg-[#0B1221] text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
                   }`}
                 >
                   {OPTION_LETTERS[item.idx]}
@@ -512,15 +535,15 @@ export const QuestionManager: React.FC<QuestionManagerProps> = ({
                   value={item.val}
                   onChange={(e) => item.set(e.target.value)}
                   placeholder={item.label}
-                  className="w-full rounded-lg border border-white/15 bg-[#0B1221] px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-amber-400 focus:outline-none"
+                  className="w-full rounded-lg border border-slate-300 dark:border-white/15 bg-white dark:bg-[#0B1221] px-3 py-2 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:border-amber-500 dark:focus:border-amber-400 focus:outline-none"
                 />
               </div>
             ))}
           </div>
 
-          <p className="text-xs text-slate-400">
+          <p className="text-xs text-slate-500 dark:text-slate-400">
             Selected correct answer:{' '}
-            <span className="font-semibold text-emerald-400">
+            <span className="font-semibold text-emerald-700 dark:text-emerald-400">
               Option {OPTION_LETTERS[correctIdx]}
             </span>{' '}
             (click A, B, C, or D button to change).
@@ -532,19 +555,19 @@ export const QuestionManager: React.FC<QuestionManagerProps> = ({
               value={topic}
               onChange={(e) => setTopic(e.target.value)}
               placeholder="Topic (optional, e.g. Physics)"
-              className="w-full rounded-lg border border-white/15 bg-[#0B1221] px-3 py-2 text-xs text-white placeholder:text-slate-500 focus:border-amber-400 focus:outline-none"
+              className="w-full rounded-lg border border-slate-300 dark:border-white/15 bg-white dark:bg-[#0B1221] px-3 py-2 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:border-amber-500 dark:focus:border-amber-400 focus:outline-none"
             />
             <input
               type="text"
               value={explanation}
               onChange={(e) => setExplanation(e.target.value)}
               placeholder="Explanation shown after reveal (optional)"
-              className="w-full rounded-lg border border-white/15 bg-[#0B1221] px-3 py-2 text-xs text-white placeholder:text-slate-500 focus:border-amber-400 focus:outline-none"
+              className="w-full rounded-lg border border-slate-300 dark:border-white/15 bg-white dark:bg-[#0B1221] px-3 py-2 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:border-amber-500 dark:focus:border-amber-400 focus:outline-none"
             />
           </div>
 
           {builderError && (
-            <p className="text-xs text-red-300" role="alert">
+            <p className="text-xs text-red-600 dark:text-red-300" role="alert">
               {builderError}
             </p>
           )}
