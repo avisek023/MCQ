@@ -1,0 +1,23 @@
+[
+  {
+    "id": "BNS",
+    "name": "Bharatiya Nyaya Sanhita, 2023",
+    "file": "/data/subjects/bns.json",
+    "questionCount": 1082,
+    "chapterCount": 21
+  },
+  {
+    "id": "BNSS",
+    "name": "Bharatiya Nagarik Suraksha Sanhita, 2023",
+    "file": "/data/subjects/bnss.json",
+    "questionCount": 1224,
+    "chapterCount": 39
+  },
+  {
+    "id": "BSA",
+    "name": "Bharatiya Sakshya Adhiniyam, 2023",
+    "file": "/data/subjects/bsa.json",
+    "questionCount": 1089,
+    "chapterCount": 12
+  }
+]

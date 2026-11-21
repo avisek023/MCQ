@@ -48,7 +48,7 @@ export const LandingView: React.FC<LandingViewProps> = ({
   const activeError = localError || error;
 
   return (
-    <main className="mx-auto max-w-6xl px-4 sm:px-6 py-6 sm:py-12 lg:py-16">
+    <div className="mx-auto max-w-6xl px-4 sm:px-6 py-6 sm:py-12 lg:py-16">
       {/* Hero Split */}
       <section className="grid grid-cols-1 gap-8 lg:gap-12 lg:grid-cols-12 lg:items-stretch">
         {/* Left Column: Pitch + Room Entry Form */}
@@ -64,9 +64,9 @@ export const LandingView: React.FC<LandingViewProps> = ({
               Host a private MCQ battle with secret lock-in and automatic rollover
             </h1>
             <p className="text-sm sm:text-lg text-slate-600 dark:text-slate-300 leading-relaxed max-w-xl mb-6 sm:mb-8">
-              Host creates the room, uploads questions, and chooses to watch participants, play
-              alongside the group (up to 3 guests), or play solo. Rounds run hands-free with 45s
-              default timers, shuffled questions, and 1 point per correct answer.
+              Host creates the room, uploads questions, and chooses Exam (+1 / −0.25), Accuracy
+              (+1), or Speed (10 + time bonus) scoring. Play solo, with up to 3 participants, or
+              moderate hands-free with 45s timers.
             </p>
           </div>
 
@@ -218,7 +218,7 @@ export const LandingView: React.FC<LandingViewProps> = ({
               Hidden until all active players lock in
             </span>
             <span className="font-mono-tabular text-amber-600 dark:text-amber-400 font-semibold">
-              +1 pt per correct answer
+              Exam · Accuracy · Speed
             </span>
           </div>
         </div>
@@ -253,8 +253,9 @@ export const LandingView: React.FC<LandingViewProps> = ({
               02. Instant Simultaneous Reveal
             </h3>
             <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-              The instant all active players lock in or time expires, green checkmarks and red picks
-              reveal together—awarding a simple +1 point for every correct answer.
+              The instant all active players lock in, skip, or time expires, green checkmarks and
+              picks reveal together—scoring by Exam (+1 / −0.25 / 0 skip), Accuracy (+1), or
+              Speed (10 + speed bonus).
             </p>
           </div>
 
@@ -303,6 +304,6 @@ export const LandingView: React.FC<LandingViewProps> = ({
           </div>
         </div>
       </section>
-    </main>
+    </div>
   );
 };

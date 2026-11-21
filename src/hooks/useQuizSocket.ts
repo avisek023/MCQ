@@ -63,6 +63,18 @@ export function useQuizSocket() {
     }
 
     if (msg.type === 'room:joined' || msg.type === 'room:state') {
+      const prev = snapshotRef.current;
+      if (msg.type === 'room:joined') {
+        if (!prev || prev.roomCode !== msg.snapshot.roomCode) {
+          soundEngine.playRoomJoin();
+        }
+      } else if (
+        prev &&
+        msg.snapshot.players.filter((p) => !p.hasLeft).length >
+          prev.players.filter((p) => !p.hasLeft).length
+      ) {
+        soundEngine.playPlayerJoined();
+      }
       setError(null);
       setServerOffsetMs(msg.snapshot.serverNow - Date.now());
       setSnapshot(msg.snapshot);
@@ -74,13 +86,28 @@ export function useQuizSocket() {
       return;
     }
 
+    if (msg.type === 'presence:changed') {
+      setSnapshot((prev) =>
+        prev
+          ? {
+              ...prev,
+              players: prev.players.map((p) =>
+                p.id === msg.playerId ? { ...p, presenceStatus: msg.presenceStatus } : p
+              ),
+            }
+          : prev
+      );
+      return;
+    }
+
     if (msg.type === 'answer:locked_self') {
       soundEngine.playLockIn();
       setSnapshot((prev) =>
         prev
           ? {
               ...prev,
-              selfLockedOption: msg.optionIndex,
+              selfLockedOption: msg.skipped ? null : msg.optionIndex,
+              selfSkipped: Boolean(msg.skipped),
               lockedPlayerIds: prev.lockedPlayerIds.includes(prev.selfId)
                 ? prev.lockedPlayerIds
                 : [...prev.lockedPlayerIds, prev.selfId],
@@ -107,6 +134,11 @@ export function useQuizSocket() {
     }
 
     if (msg.type === 'round:started') {
+      if (msg.questionIndex === 0) {
+        soundEngine.playMatchStart();
+      } else {
+        soundEngine.playNextRound();
+      }
       setServerOffsetMs(msg.serverNow - Date.now());
       setSnapshot((prev) =>
         prev
@@ -120,6 +152,7 @@ export function useQuizSocket() {
               questionStartedAt: msg.questionStartedAt,
               serverNow: msg.serverNow,
               selfLockedOption: null,
+              selfSkipped: false,
               opponentLocked: false,
               lockedPlayerIds: [],
               currentReview: null,
@@ -130,24 +163,30 @@ export function useQuizSocket() {
     }
 
     if (msg.type === 'round:revealed') {
-      setSnapshot((prev) => {
-        if (!prev) return prev;
+      const prev = snapshotRef.current;
+      if (prev) {
         const selfPick = msg.review.picks[prev.selfId];
-        if (selfPick?.isCorrect) {
+        if (!selfPick || selfPick.skipped) {
+          soundEngine.playRevealNeutral();
+        } else if (selfPick.isCorrect) {
           soundEngine.playCorrect();
         } else {
           soundEngine.playWrong();
         }
-        return {
-          ...prev,
-          phase: 'REVEAL',
-          players: msg.players,
-          currentReview: msg.review,
-          history: prev.history.some((r) => r.questionIndex === msg.review.questionIndex)
-            ? prev.history
-            : [...prev.history, msg.review],
-        };
-      });
+      }
+      setSnapshot((curr) =>
+        curr
+          ? {
+              ...curr,
+              phase: 'REVEAL',
+              players: msg.players,
+              currentReview: msg.review,
+              history: curr.history.some((r) => r.questionIndex === msg.review.questionIndex)
+                ? curr.history
+                : [...curr.history, msg.review],
+            }
+          : curr
+      );
       return;
     }
 
@@ -167,15 +206,20 @@ export function useQuizSocket() {
     }
 
     if (msg.type === 'chat:message') {
-      setSnapshot((prev) => {
-        if (!prev) return prev;
-        if (prev.messages.some((m) => m.id === msg.message.id)) return prev;
-        if (msg.message.senderId !== prev.selfId) {
-          soundEngine.playChatPop();
-        }
+      const prev = snapshotRef.current;
+      if (
+        prev &&
+        !prev.messages.some((m) => m.id === msg.message.id) &&
+        msg.message.senderId !== prev.selfId
+      ) {
+        soundEngine.playChatPop();
+      }
+      setSnapshot((curr) => {
+        if (!curr) return curr;
+        if (curr.messages.some((m) => m.id === msg.message.id)) return curr;
         return {
-          ...prev,
-          messages: [...prev.messages, msg.message].slice(-100),
+          ...curr,
+          messages: [...curr.messages, msg.message].slice(-100),
         };
       });
     }
@@ -280,8 +324,91 @@ export function useQuizSocket() {
     };
   }, [connect]);
 
+  // Live 3-color presence tracking (30s inactivity or tab hidden -> idle; activity/visible -> active)
+  const roomCode = snapshot?.roomCode ?? null;
+  useEffect(() => {
+    if (!connected || !roomCode) return;
+
+    const IDLE_TIMEOUT_MS = 30_000;
+    let lastActivityAt = Date.now();
+    let reportedStatus: 'active' | 'idle' | null = null;
+    let idleTimerId: number | null = null;
+
+    const emitPresence = (nextStatus: 'active' | 'idle') => {
+      if (reportedStatus === nextStatus) return;
+      const ws = wsRef.current;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        reportedStatus = nextStatus;
+        ws.send(JSON.stringify({ type: 'presence:update', status: nextStatus } satisfies ClientMessage));
+      }
+    };
+
+    const scheduleIdleTimer = () => {
+      if (idleTimerId !== null) {
+        window.clearTimeout(idleTimerId);
+      }
+      const remaining = Math.max(0, IDLE_TIMEOUT_MS - (Date.now() - lastActivityAt));
+      idleTimerId = window.setTimeout(() => {
+        if (document.visibilityState === 'hidden' || Date.now() - lastActivityAt >= IDLE_TIMEOUT_MS) {
+          emitPresence('idle');
+        }
+      }, remaining);
+    };
+
+    const markActive = () => {
+      if (document.visibilityState === 'hidden') return;
+      lastActivityAt = Date.now();
+      emitPresence('active');
+      scheduleIdleTimer();
+    };
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        if (idleTimerId !== null) {
+          window.clearTimeout(idleTimerId);
+          idleTimerId = null;
+        }
+        emitPresence('idle');
+      } else {
+        markActive();
+      }
+    };
+
+    // Initial sync when entering room / connecting
+    if (document.visibilityState === 'hidden') {
+      emitPresence('idle');
+    } else {
+      emitPresence('active');
+      scheduleIdleTimer();
+    }
+
+    const activityEvents: (keyof WindowEventMap)[] = [
+      'pointerdown',
+      'keydown',
+      'touchstart',
+      'mousemove',
+    ];
+    for (const evt of activityEvents) {
+      window.addEventListener(evt, markActive, { passive: true });
+    }
+    window.addEventListener('scroll', markActive, { passive: true, capture: true });
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    return () => {
+      if (idleTimerId !== null) {
+        window.clearTimeout(idleTimerId);
+      }
+      for (const evt of activityEvents) {
+        window.removeEventListener(evt, markActive);
+      }
+      window.removeEventListener('scroll', markActive, { capture: true });
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [connected, roomCode]);
+
   const createRoom = useCallback(
     (playerName: string) => {
+      soundEngine.unlock();
       setError(null);
       send({ type: 'room:create', playerName, playerToken: tokenRef.current });
     },
@@ -290,6 +417,7 @@ export function useQuizSocket() {
 
   const joinRoom = useCallback(
     (roomCode: string, playerName: string) => {
+      soundEngine.unlock();
       setError(null);
       send({
         type: 'room:join',
@@ -332,22 +460,31 @@ export function useQuizSocket() {
   );
 
   const startMatch = useCallback(() => {
+    soundEngine.unlock();
     setError(null);
     send({ type: 'match:start' });
   }, [send]);
 
   const lockAnswer = useCallback(
     (optionIndex: OptionIndex) => {
+      soundEngine.unlock();
       send({ type: 'answer:lock', optionIndex });
     },
     [send]
   );
 
+  const skipAnswer = useCallback(() => {
+    soundEngine.unlock();
+    send({ type: 'answer:skip' });
+  }, [send]);
+
   const nextRound = useCallback(() => {
+    soundEngine.unlock();
     send({ type: 'round:next' });
   }, [send]);
 
   const rematch = useCallback(() => {
+    soundEngine.unlock();
     send({ type: 'match:rematch' });
   }, [send]);
 
@@ -384,6 +521,7 @@ export function useQuizSocket() {
     updateDeck,
     startMatch,
     lockAnswer,
+    skipAnswer,
     nextRound,
     rematch,
     sendChat,

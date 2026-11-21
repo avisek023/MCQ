@@ -4,19 +4,21 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocket, WebSocketServer } from 'ws';
 import { STARTER_DECK_TITLE, STARTER_QUESTIONS } from './src/shared/starterQuestions.ts';
-import type {
-  ChatMessage,
-  ClientMessage,
-  ClientQuestion,
-  MatchPhase,
-  OptionIndex,
-  PlayerInfo,
-  Question,
-  RoomSettings,
-  RoomSnapshot,
-  RoundPickResult,
-  RoundReview,
-  ServerMessage,
+import {
+  roundPoints,
+  type ChatMessage,
+  type ClientMessage,
+  type ClientQuestion,
+  type MatchPhase,
+  type OptionIndex,
+  type PlayerInfo,
+  type PresenceStatus,
+  type Question,
+  type RoomSettings,
+  type RoomSnapshot,
+  type RoundPickResult,
+  type RoundReview,
+  type ServerMessage,
 } from './src/shared/types.ts';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -37,8 +39,9 @@ interface ServerPlayer extends PlayerInfo {
 }
 
 interface PendingPick {
-  optionIndex: OptionIndex;
-  elapsedMs: number;
+  optionIndex: OptionIndex | null;
+  skipped: boolean;
+  elapsedMs: number | null;
 }
 
 interface ServerRoom {
@@ -114,10 +117,14 @@ function toPublicPlayer(p: ServerPlayer): PlayerInfo {
     role: p.role,
     isHost: p.isHost,
     connected: p.connected,
-    score: p.score,
+    presenceStatus: p.presenceStatus,
+    hasLeft: Boolean(p.hasLeft),
+    score: roundPoints(p.score),
     streak: p.streak,
     bestStreak: p.bestStreak,
     correctCount: p.correctCount,
+    wrongCount: p.wrongCount,
+    unattemptedCount: p.unattemptedCount,
     totalResponseMs: p.totalResponseMs,
     answeredCount: p.answeredCount,
     readyForNext: p.readyForNext,
@@ -178,7 +185,8 @@ function buildSnapshot(room: ServerRoom, selfPlayer: ServerPlayer): RoomSnapshot
     currentQuestion: currentQ,
     questionStartedAt: room.questionStartedAt,
     serverNow: Date.now(),
-    selfLockedOption: selfPick ? selfPick.optionIndex : null,
+    selfLockedOption: selfPick && !selfPick.skipped ? selfPick.optionIndex : null,
+    selfSkipped: Boolean(selfPick?.skipped),
     opponentLocked,
     lockedPlayerIds: Array.from(room.currentPicks.keys()),
     currentReview: room.currentReview,
@@ -205,6 +213,16 @@ function broadcastSnapshot(room: ServerRoom): void {
     sendToPlayer(player, {
       type: 'room:state',
       snapshot: buildSnapshot(room, player),
+    });
+  }
+}
+
+function broadcastPresence(room: ServerRoom, playerId: string, presenceStatus: PresenceStatus): void {
+  for (const player of room.players) {
+    sendToPlayer(player, {
+      type: 'presence:changed',
+      playerId,
+      presenceStatus,
     });
   }
 }
@@ -236,7 +254,7 @@ function clearAllRoomTimers(room: ServerRoom): void {
 
 function maybeRevealIfAllConnectedLocked(room: ServerRoom): boolean {
   if (room.phase !== 'QUESTION') return false;
-  const connectedActive = getActivePlayers(room).filter((p) => p.connected);
+  const connectedActive = getActivePlayers(room).filter((p) => p.connected && !p.hasLeft);
   if (
     connectedActive.length > 0 &&
     connectedActive.every((p) => room.currentPicks.has(p.id))
@@ -257,7 +275,7 @@ function kickParticipant(
   );
   if (idx === -1) return false;
 
-  const [target] = room.players.splice(idx, 1);
+  const target = room.players[idx];
   clearPlayerAwayTimer(target);
   room.currentPicks.delete(target.id);
 
@@ -278,7 +296,15 @@ function kickParticipant(
     target.ws = null;
   }
 
-  const remainingActive = getActivePlayers(room);
+  if (room.phase === 'LOBBY') {
+    room.players.splice(idx, 1);
+  } else {
+    target.connected = false;
+    target.presenceStatus = 'offline';
+    target.hasLeft = true;
+  }
+
+  const remainingActive = getActivePlayers(room).filter((p) => !p.hasLeft);
   if (
     remainingActive.length === 0 &&
     (room.phase === 'QUESTION' || room.phase === 'REVEAL')
@@ -289,6 +315,7 @@ function kickParticipant(
     room.currentPicks.clear();
     room.currentReview = null;
     room.history = [];
+    room.players = room.players.filter((p) => !p.hasLeft);
     room.players.forEach(resetPlayerMatchStats);
     broadcastSnapshot(room);
     return true;
@@ -357,22 +384,26 @@ function revealCurrentRound(room: ServerRoom): void {
   if (!q) return;
 
   const picks: Record<string, RoundPickResult> = {};
-  const participants = getParticipants(room);
+  const participants = getParticipants(room).filter((p) => !p.hasLeft);
   for (const participant of participants) {
     if (!participant.connected) {
       participant.questionsMissedWhileAway += 1;
     }
   }
   const activePlayers = getActivePlayers(room);
+  const scoringMode = room.settings.scoringMode ?? 'exam';
+  const timeLimitMs = room.settings.timeLimitSec * 1000;
 
   for (const player of activePlayers) {
     const pick = room.currentPicks.get(player.id);
-    if (!pick) {
+    if (!pick || pick.skipped || pick.optionIndex === null) {
       player.streak = 0;
+      player.unattemptedCount += 1;
       picks[player.id] = {
         playerId: player.id,
         playerName: player.name,
         optionIndex: null,
+        skipped: Boolean(pick?.skipped),
         elapsedMs: null,
         isCorrect: false,
         basePoints: 0,
@@ -383,16 +414,26 @@ function revealCurrentRound(room: ServerRoom): void {
       continue;
     }
 
+    const elapsedMs = pick.elapsedMs ?? timeLimitMs;
     const isCorrect = pick.optionIndex === q.correctIndex;
     player.answeredCount += 1;
-    player.totalResponseMs += pick.elapsedMs;
+    player.totalResponseMs += elapsedMs;
 
     if (isCorrect) {
-      const basePoints = 1;
-      const speedBonus = 0;
-      const totalPoints = 1;
+      let basePoints = 1;
+      let speedBonus = 0;
 
-      player.score += totalPoints;
+      if (scoringMode === 'speed') {
+        basePoints = 10;
+        speedBonus = Math.max(
+          0,
+          Math.min(5, Math.round(((timeLimitMs - elapsedMs) / Math.max(1, timeLimitMs)) * 5))
+        );
+      }
+
+      const totalPoints = roundPoints(basePoints + speedBonus);
+
+      player.score = roundPoints(player.score + totalPoints);
       player.correctCount += 1;
       player.streak += 1;
       if (player.streak > player.bestStreak) {
@@ -403,7 +444,8 @@ function revealCurrentRound(room: ServerRoom): void {
         playerId: player.id,
         playerName: player.name,
         optionIndex: pick.optionIndex,
-        elapsedMs: pick.elapsedMs,
+        skipped: false,
+        elapsedMs,
         isCorrect: true,
         basePoints,
         speedBonus,
@@ -412,15 +454,20 @@ function revealCurrentRound(room: ServerRoom): void {
       };
     } else {
       player.streak = 0;
+      player.wrongCount += 1;
+      const penalty = scoringMode === 'exam' ? -0.25 : 0;
+      player.score = roundPoints(player.score + penalty);
+
       picks[player.id] = {
         playerId: player.id,
         playerName: player.name,
         optionIndex: pick.optionIndex,
-        elapsedMs: pick.elapsedMs,
+        skipped: false,
+        elapsedMs,
         isCorrect: false,
-        basePoints: 0,
+        basePoints: penalty,
         speedBonus: 0,
-        totalPoints: 0,
+        totalPoints: penalty,
         streakAfter: 0,
       };
     }
@@ -480,6 +527,8 @@ function resetPlayerMatchStats(player: ServerPlayer): void {
   player.streak = 0;
   player.bestStreak = 0;
   player.correctCount = 0;
+  player.wrongCount = 0;
+  player.unattemptedCount = 0;
   player.totalResponseMs = 0;
   player.answeredCount = 0;
   player.readyForNext = false;
@@ -535,15 +584,36 @@ function handleDisconnectOrLeave(ws: WebSocket, explicitLeave: boolean): void {
 
   if (explicitLeave) {
     clearPlayerAwayTimer(player);
-    room.players.splice(idx, 1);
     room.currentPicks.delete(player.id);
-    if (room.players.length === 0) {
+    player.connected = false;
+    player.presenceStatus = 'offline';
+    player.ws = null;
+
+    if (room.phase === 'LOBBY') {
+      room.players.splice(idx, 1);
+      if (room.players.length === 0) {
+        clearAllRoomTimers(room);
+        rooms.delete(room.roomCode);
+        return;
+      }
+      if (!room.players.some((p) => p.isHost)) {
+        room.players[0].isHost = true;
+        room.players[0].role = 'host';
+      }
+      broadcastSnapshot(room);
+      return;
+    }
+
+    // Match in progress or finished: persist departed participant record with 'Left' status
+    player.hasLeft = true;
+    const remainingNonLeft = room.players.filter((p) => !p.hasLeft);
+    if (remainingNonLeft.length === 0) {
       clearAllRoomTimers(room);
       rooms.delete(room.roomCode);
       return;
     }
-    const remainingActive = getActivePlayers(room);
-    // Reset an active match only if no active players remain; otherwise continue with remaining players
+
+    const remainingActive = getActivePlayers(room).filter((p) => !p.hasLeft);
     if (
       remainingActive.length === 0 &&
       (room.phase === 'QUESTION' || room.phase === 'REVEAL')
@@ -554,22 +624,25 @@ function handleDisconnectOrLeave(ws: WebSocket, explicitLeave: boolean): void {
       room.currentPicks.clear();
       room.currentReview = null;
       room.history = [];
+      room.players = room.players.filter((p) => !p.hasLeft);
       room.players.forEach(resetPlayerMatchStats);
+      if (room.players.length > 0 && !room.players.some((p) => p.isHost)) {
+        room.players[0].isHost = true;
+        room.players[0].role = 'host';
+      }
     } else if (room.phase === 'QUESTION' && maybeRevealIfAllConnectedLocked(room)) {
       return;
     }
-    if (room.phase === 'LOBBY' && !room.players.some((p) => p.isHost)) {
-      room.players[0].isHost = true;
-      room.players[0].role = 'host';
-    }
+
     broadcastSnapshot(room);
   } else {
     player.connected = false;
+    player.presenceStatus = 'offline';
     player.ws = null;
     player.disconnectedAt = Date.now();
     clearPlayerAwayTimer(player);
 
-    if (player.role === 'participant') {
+    if (player.role === 'participant' && !player.hasLeft) {
       player.awayKickTimer = setTimeout(() => {
         if (!player.connected) {
           kickParticipant(room, player.id, 'away_timeout');
@@ -653,10 +726,14 @@ async function startServer(): Promise<void> {
           role: 'host',
           isHost: true,
           connected: true,
+          presenceStatus: 'active',
+          hasLeft: false,
           score: 0,
           streak: 0,
           bestStreak: 0,
           correctCount: 0,
+          wrongCount: 0,
+          unattemptedCount: 0,
           totalResponseMs: 0,
           answeredCount: 0,
           readyForNext: false,
@@ -672,6 +749,7 @@ async function startServer(): Promise<void> {
           players: [host],
           settings: {
             hostMode: 'moderator',
+            scoringMode: 'exam',
             timeLimitSec: 45,
             speedBonusEnabled: false,
             autoAdvanceSec: 4,
@@ -724,6 +802,8 @@ async function startServer(): Promise<void> {
           }
           existing.ws = ws;
           existing.connected = true;
+          existing.hasLeft = false;
+          existing.presenceStatus = 'active';
           existing.disconnectedAt = null;
           existing.questionsMissedWhileAway = 0;
           clearPlayerAwayTimer(existing);
@@ -744,10 +824,10 @@ async function startServer(): Promise<void> {
           return;
         }
 
-        // Room capacity: 1 Host + 3 Participants
-        const participants = getParticipants(room);
-        if (participants.length >= 3) {
-          const disconnectedParticipant = participants.find((p) => !p.connected);
+        // Room capacity: 1 Host + 3 Active Participants (open for mid-quiz joining too)
+        const activeParticipants = getParticipants(room).filter((p) => !p.hasLeft);
+        if (activeParticipants.length >= 3) {
+          const disconnectedParticipant = activeParticipants.find((p) => !p.connected);
           if (room.phase === 'LOBBY' && disconnectedParticipant) {
             const removeIdx = room.players.findIndex((p) => p.id === disconnectedParticipant.id);
             if (removeIdx !== -1) {
@@ -756,7 +836,7 @@ async function startServer(): Promise<void> {
           } else {
             sendError(
               ws,
-              'This session already has 3 participants seated (1 Host + 3 Participants).',
+              'This session already has 3 active participants seated (1 Host + 3 Participants).',
               'ROOM_FULL'
             );
             return;
@@ -764,17 +844,23 @@ async function startServer(): Promise<void> {
         }
 
         const playerId = `p-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+        const missedPriorCount = room.phase === 'LOBBY' ? 0 : room.history.length;
+        const guestName = sanitizeName(msg.playerName);
         const guest: ServerPlayer = {
           id: playerId,
           token: msg.playerToken || playerId,
-          name: sanitizeName(msg.playerName),
+          name: guestName,
           role: 'participant',
           isHost: false,
           connected: true,
+          presenceStatus: 'active',
+          hasLeft: false,
           score: 0,
           streak: 0,
           bestStreak: 0,
           correctCount: 0,
+          wrongCount: 0,
+          unattemptedCount: missedPriorCount,
           totalResponseMs: 0,
           answeredCount: 0,
           readyForNext: false,
@@ -783,6 +869,24 @@ async function startServer(): Promise<void> {
           questionsMissedWhileAway: 0,
           awayKickTimer: null,
         };
+
+        // Backfill missed rounds in history as Unattempted for mid-quiz joiners
+        if (room.phase !== 'LOBBY') {
+          for (const rev of room.history) {
+            rev.picks[guest.id] = {
+              playerId: guest.id,
+              playerName: guest.name,
+              optionIndex: null,
+              skipped: false,
+              elapsedMs: null,
+              isCorrect: false,
+              basePoints: 0,
+              speedBonus: 0,
+              totalPoints: 0,
+              streakAfter: 0,
+            };
+          }
+        }
 
         room.players.push(guest);
         socketMeta.set(ws, { roomCode: code, playerId });
@@ -816,6 +920,21 @@ async function startServer(): Promise<void> {
         return;
       }
 
+      if (msg.type === 'presence:update') {
+        if (sender.hasLeft || !sender.connected) return;
+        const nextStatus: PresenceStatus = msg.status === 'idle' ? 'idle' : 'active';
+        if (sender.presenceStatus !== nextStatus) {
+          sender.presenceStatus = nextStatus;
+          broadcastPresence(room, sender.id, nextStatus);
+        }
+        return;
+      }
+
+      if (!sender.hasLeft && sender.connected && sender.presenceStatus !== 'active') {
+        sender.presenceStatus = 'active';
+        broadcastPresence(room, sender.id, 'active');
+      }
+
       if (msg.type === 'room:kick') {
         if (!sender.isHost) {
           sendError(ws, 'Only the session Host can kick participants.');
@@ -831,13 +950,17 @@ async function startServer(): Promise<void> {
         if (s.hostMode === 'moderator' || s.hostMode === 'play_with' || s.hostMode === 'solo') {
           room.settings.hostMode = s.hostMode;
         }
+        if (s.scoringMode === 'exam' || s.scoringMode === 'accuracy' || s.scoringMode === 'speed') {
+          room.settings.scoringMode = s.scoringMode;
+          room.settings.speedBonusEnabled = s.scoringMode === 'speed';
+        }
         if (
           typeof s.timeLimitSec === 'number' &&
           [10, 15, 20, 30, 45, 60, 75, 90].includes(s.timeLimitSec)
         ) {
           room.settings.timeLimitSec = s.timeLimitSec;
         }
-        if (typeof s.speedBonusEnabled === 'boolean') {
+        if (typeof s.speedBonusEnabled === 'boolean' && !s.scoringMode) {
           room.settings.speedBonusEnabled = s.speedBonusEnabled;
         }
         if (typeof s.autoAdvanceSec === 'number' && [0, 4, 6, 8, 12].includes(s.autoAdvanceSec)) {
@@ -876,7 +999,9 @@ async function startServer(): Promise<void> {
 
       if (msg.type === 'match:start') {
         if (!sender.isHost || room.phase !== 'LOBBY') return;
-        const connectedParticipants = getParticipants(room).filter((p) => p.connected);
+        const connectedParticipants = getParticipants(room).filter(
+          (p) => p.connected && !p.hasLeft
+        );
         if (room.settings.hostMode !== 'solo' && connectedParticipants.length < 1) {
           sendError(
             ws,
@@ -913,6 +1038,7 @@ async function startServer(): Promise<void> {
 
         room.currentPicks.set(sender.id, {
           optionIndex: msg.optionIndex,
+          skipped: false,
           elapsedMs,
         });
 
@@ -920,6 +1046,7 @@ async function startServer(): Promise<void> {
         sendToPlayer(sender, {
           type: 'answer:locked_self',
           optionIndex: msg.optionIndex,
+          skipped: false,
         });
 
         // Notify other room members (other participant + observing host) WITHOUT revealing chosen option
@@ -938,6 +1065,37 @@ async function startServer(): Promise<void> {
         return;
       }
 
+      if (msg.type === 'answer:skip') {
+        if (room.phase !== 'QUESTION') return;
+        if (!isActivePlayer(room, sender)) return;
+        if (room.currentPicks.has(sender.id)) return;
+
+        room.currentPicks.set(sender.id, {
+          optionIndex: null,
+          skipped: true,
+          elapsedMs: null,
+        });
+
+        sendToPlayer(sender, {
+          type: 'answer:locked_self',
+          optionIndex: null,
+          skipped: true,
+        });
+
+        for (const other of room.players) {
+          if (other.id !== sender.id) {
+            sendToPlayer(other, {
+              type: 'answer:locked_opponent',
+              playerId: sender.id,
+              playerName: sender.name,
+            });
+          }
+        }
+
+        maybeRevealIfAllConnectedLocked(room);
+        return;
+      }
+
       if (msg.type === 'round:next') {
         if (room.phase !== 'REVEAL') return;
         if (sender.isHost) {
@@ -947,7 +1105,9 @@ async function startServer(): Promise<void> {
 
         sender.readyForNext = true;
         const activePlayers = getActivePlayers(room);
-        const allActiveReady = activePlayers.every((p) => p.readyForNext || !p.connected);
+        const allActiveReady = activePlayers.every(
+          (p) => p.readyForNext || !p.connected || p.hasLeft
+        );
         if (allActiveReady) {
           advanceToNextRound(room);
         } else {
@@ -958,7 +1118,7 @@ async function startServer(): Promise<void> {
 
       if (msg.type === 'match:rematch') {
         if (room.phase !== 'MATCH_OVER') return;
-        const hostConnected = room.players.some((p) => p.isHost && p.connected);
+        const hostConnected = room.players.some((p) => p.isHost && p.connected && !p.hasLeft);
         if (!sender.isHost && hostConnected) return;
         clearRoomTimers(room);
         room.phase = 'LOBBY';
@@ -966,7 +1126,12 @@ async function startServer(): Promise<void> {
         room.currentPicks.clear();
         room.currentReview = null;
         room.history = [];
+        room.players = room.players.filter((p) => !p.hasLeft);
         room.players.forEach(resetPlayerMatchStats);
+        if (room.players.length > 0 && !room.players.some((p) => p.isHost)) {
+          room.players[0].isHost = true;
+          room.players[0].role = 'host';
+        }
         broadcastSnapshot(room);
         return;
       }

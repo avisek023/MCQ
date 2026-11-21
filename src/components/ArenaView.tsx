@@ -1,13 +1,32 @@
 import React, { memo, useEffect, useRef, useState } from 'react';
-import { ArrowRight, Check, Clock, Eye, Lock, UserX, X } from 'lucide-react';
-import { OPTION_LETTERS, OptionIndex, RoomSnapshot } from '../shared/types';
+import {
+  ArrowRight,
+  Check,
+  Clock,
+  Copy,
+  Eye,
+  Lock,
+  Share2,
+  SkipForward,
+  UserX,
+  X,
+} from 'lucide-react';
+import {
+  OPTION_LETTERS,
+  OptionIndex,
+  RoomSnapshot,
+  SCORING_MODE_DETAILS,
+  formatPointsWithUnit,
+} from '../shared/types';
 import { soundEngine } from '../utils/sound';
+import { PresenceDot } from './PresenceDot';
 import { RoomChat } from './RoomChat';
 
 interface ArenaViewProps {
   snapshot: RoomSnapshot;
   serverOffsetMs: number;
   onLockAnswer: (optionIndex: OptionIndex) => void;
+  onSkipAnswer: () => void;
   onNextRound: () => void;
   onKickPlayer: (playerId: string) => void;
   onSendChat: (text: string, kind?: 'message' | 'reaction') => void;
@@ -111,12 +130,15 @@ export const ArenaView: React.FC<ArenaViewProps> = ({
   snapshot,
   serverOffsetMs,
   onLockAnswer,
+  onSkipAnswer,
   onNextRound,
   onKickPlayer,
   onSendChat,
 }) => {
   const self = snapshot.players.find((p) => p.id === snapshot.selfId);
   const hostMode = snapshot.settings.hostMode ?? 'moderator';
+  const scoringMode = snapshot.settings.scoringMode ?? 'exam';
+  const selfSubmitted = snapshot.selfLockedOption !== null || snapshot.selfSkipped;
   const activePlayers = snapshot.players.filter((p) => {
     if (hostMode === 'solo') return p.isHost;
     if (hostMode === 'play_with') return true;
@@ -125,13 +147,67 @@ export const ArenaView: React.FC<ArenaViewProps> = ({
   const isSelfPlaying = activePlayers.some((p) => p.id === snapshot.selfId);
   const isSpectator = !isSelfPlaying;
   const isHost = Boolean(self?.isHost);
-  const connectedOthers = activePlayers.filter((p) => p.id !== snapshot.selfId && p.connected);
+  const connectedOthers = activePlayers.filter(
+    (p) => p.id !== snapshot.selfId && p.connected && !p.hasLeft
+  );
   const connectedOthersLockedCount = connectedOthers.filter((p) =>
     snapshot.lockedPlayerIds.includes(p.id)
   ).length;
   const totalConnectedOtherCount = connectedOthers.length;
 
   const [autoAdvanceLeftSec, setAutoAdvanceLeftSec] = useState(snapshot.settings.autoAdvanceSec);
+  const [copiedCode, setCopiedCode] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
+
+  const inviteUrl = `${window.location.origin}/?room=${snapshot.roomCode}`;
+
+  const copyWithFallback = async (text: string): Promise<boolean> => {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        const ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        return ok;
+      } catch {
+        return false;
+      }
+    }
+  };
+
+  const handleCopyCode = async () => {
+    if (await copyWithFallback(snapshot.roomCode)) {
+      setCopiedCode(true);
+      setTimeout(() => setCopiedCode(false), 1800);
+    }
+  };
+
+  const handleShareInvite = async () => {
+    if (typeof navigator.share === 'function') {
+      try {
+        await navigator.share({
+          title: 'Join QuizDuel Session',
+          text: `Join our live QuizDuel match with code ${snapshot.roomCode}`,
+          url: inviteUrl,
+        });
+        return;
+      } catch {
+        // cancelled or unsupported; fallback to copy
+      }
+    }
+    if (await copyWithFallback(inviteUrl)) {
+      setCopiedLink(true);
+      setTimeout(() => setCopiedLink(false), 1800);
+    }
+  };
 
   // Countdown for automatic rollover during REVEAL
   useEffect(() => {
@@ -146,13 +222,18 @@ export const ArenaView: React.FC<ArenaViewProps> = ({
     return () => window.clearInterval(interval);
   }, [snapshot.phase, snapshot.currentQuestionIndex, snapshot.settings.autoAdvanceSec]);
 
-  // Keyboard shortcuts A/B/C/D or 1/2/3/4 during QUESTION (active players only)
+  // Keyboard shortcuts A/B/C/D, 1/2/3/4, or S to skip during QUESTION (active players only)
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (isSpectator) return;
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      if (snapshot.phase === 'QUESTION' && snapshot.selfLockedOption === null) {
+      if (snapshot.phase === 'QUESTION' && !selfSubmitted) {
         const key = e.key.toUpperCase();
+        if (key === 'S') {
+          e.preventDefault();
+          onSkipAnswer();
+          return;
+        }
         const map: Record<string, OptionIndex> = {
           A: 0,
           '1': 0,
@@ -171,7 +252,7 @@ export const ArenaView: React.FC<ArenaViewProps> = ({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [isSpectator, snapshot.phase, snapshot.selfLockedOption, onLockAnswer]);
+  }, [isSpectator, snapshot.phase, selfSubmitted, onLockAnswer, onSkipAnswer]);
 
   const isReveal = snapshot.phase === 'REVEAL' && snapshot.currentReview !== null;
   const review = snapshot.currentReview;
@@ -186,11 +267,19 @@ export const ArenaView: React.FC<ArenaViewProps> = ({
   const isLastQuestion = snapshot.currentQuestionIndex + 1 >= snapshot.totalQuestions;
 
   const handleOptionTap = (idx: OptionIndex) => {
-    if (isSpectator || isReveal || snapshot.selfLockedOption !== null) return;
+    if (isSpectator || isReveal || selfSubmitted) return;
     if (typeof navigator !== 'undefined' && navigator.vibrate) {
       navigator.vibrate(16);
     }
     onLockAnswer(idx);
+  };
+
+  const handleSkipTap = () => {
+    if (isSpectator || isReveal || selfSubmitted) return;
+    if (typeof navigator !== 'undefined' && navigator.vibrate) {
+      navigator.vibrate(12);
+    }
+    onSkipAnswer();
   };
 
   const scoreboardGridClass =
@@ -212,7 +301,7 @@ export const ArenaView: React.FC<ArenaViewProps> = ({
           : 'sm:grid-cols-2';
 
   return (
-    <main className="mx-auto max-w-4xl px-3.5 sm:px-6 py-4 sm:py-8">
+    <div className="mx-auto max-w-4xl px-3.5 sm:px-6 py-4 sm:py-8">
       {isSpectator && (
         <div className="mb-3.5 sm:mb-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-400/50 dark:border-amber-400/35 bg-amber-50 dark:bg-amber-500/10 px-4 py-2.5 text-xs text-amber-950 dark:text-amber-100">
           <span className="inline-flex items-center gap-2 font-semibold">
@@ -231,16 +320,53 @@ export const ArenaView: React.FC<ArenaViewProps> = ({
 
       {/* Compact Mobile-First Scoreboard & Timer Strip */}
       <section className="mb-3 sm:mb-5 rounded-2xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-[#131D33] px-3.5 sm:px-5 py-3 sm:py-4 space-y-3">
-        {/* Top Row: Round Counter + Countdown Clock */}
-        <div className="flex items-center justify-between border-b border-slate-200 dark:border-white/10 pb-2.5">
-          <div className="text-xs sm:text-sm font-medium text-slate-600 dark:text-slate-400">
-            Question{' '}
-            <span className="font-mono-tabular text-slate-900 dark:text-white font-bold">
-              {snapshot.currentQuestionIndex + 1}/{snapshot.totalQuestions}
+        {/* Top Row: Round Counter + Scoring Mode + Room Share + Countdown Clock */}
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 dark:border-white/10 pb-2.5">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs sm:text-sm font-medium text-slate-600 dark:text-slate-400 min-w-0">
+            <span>
+              Q{' '}
+              <span className="font-mono-tabular text-slate-900 dark:text-white font-bold">
+                {snapshot.currentQuestionIndex + 1}/{snapshot.totalQuestions}
+              </span>
             </span>
+            <span className="text-slate-300 dark:text-white/20" aria-hidden="true">
+              ·
+            </span>
+            <span className="text-[11px] sm:text-xs font-semibold text-emerald-700 dark:text-emerald-400">
+              {SCORING_MODE_DETAILS[scoringMode].label}
+            </span>
+            <span className="text-slate-300 dark:text-white/20" aria-hidden="true">
+              ·
+            </span>
+            <button
+              type="button"
+              onClick={handleCopyCode}
+              title="Copy room code"
+              className="inline-flex items-center gap-1 rounded-md border border-slate-200 dark:border-white/15 bg-white dark:bg-[#0B1221] px-2 py-0.5 text-[11px] font-mono-tabular font-semibold text-slate-700 dark:text-slate-200 hover:border-amber-400 transition-colors cursor-pointer"
+            >
+              {copiedCode ? (
+                <Check className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
+              ) : (
+                <Copy className="h-3 w-3 text-slate-400" />
+              )}
+              <span>{copiedCode ? 'Copied' : snapshot.roomCode}</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleShareInvite}
+              title="Share or copy room invite link"
+              className="inline-flex items-center gap-1 rounded-md border border-sky-300 dark:border-sky-400/40 bg-sky-50 dark:bg-sky-500/15 px-2 py-0.5 text-[11px] font-semibold text-sky-700 dark:text-sky-200 hover:bg-sky-100 dark:hover:bg-sky-500/25 transition-colors cursor-pointer"
+            >
+              {copiedLink ? (
+                <Check className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
+              ) : (
+                <Share2 className="h-3 w-3 text-sky-600 dark:text-sky-300" />
+              )}
+              <span>{copiedLink ? 'Link Copied' : 'Invite'}</span>
+            </button>
           </div>
           {isReveal ? (
-            <span className="text-xs sm:text-sm font-semibold text-emerald-700 dark:text-emerald-400">
+            <span className="text-xs sm:text-sm font-semibold text-emerald-700 dark:text-emerald-400 shrink-0">
               Simultaneous Reveal
             </span>
           ) : (
@@ -250,7 +376,7 @@ export const ArenaView: React.FC<ArenaViewProps> = ({
               questionStartedAt={snapshot.questionStartedAt}
               serverOffsetMs={serverOffsetMs}
               timeLimitSec={snapshot.settings.timeLimitSec}
-              selfLocked={snapshot.selfLockedOption !== null}
+              selfLocked={selfSubmitted}
             />
           )}
         </div>
@@ -271,9 +397,16 @@ export const ArenaView: React.FC<ArenaViewProps> = ({
                 }`}
               >
                 <div className="flex items-center justify-between gap-1 min-w-0">
-                  <span className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white truncate">
-                    {p.name || `P${idx + 1}`}
-                  </span>
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <PresenceDot
+                      status={p.presenceStatus}
+                      hasLeft={p.hasLeft}
+                      size="sm"
+                    />
+                    <span className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white truncate">
+                      {p.name || `P${idx + 1}`}
+                    </span>
+                  </div>
                   <div className="flex items-center gap-1 shrink-0">
                     {isMe && (
                       <span className="text-[10px] sm:text-xs font-semibold text-sky-600 dark:text-sky-400">
@@ -285,7 +418,7 @@ export const ArenaView: React.FC<ArenaViewProps> = ({
                         Host
                       </span>
                     )}
-                    {isHost && !p.isHost && (
+                    {isHost && !p.isHost && !p.hasLeft && (
                       <button
                         type="button"
                         onClick={() => onKickPlayer(p.id)}
@@ -301,21 +434,33 @@ export const ArenaView: React.FC<ArenaViewProps> = ({
                 </div>
                 <div className="mt-0.5 flex items-center justify-between gap-1">
                   <span className="font-mono-tabular text-xs sm:text-sm font-semibold text-amber-600 dark:text-amber-300">
-                    {p.score} {p.score === 1 ? 'pt' : 'pts'}
+                    {formatPointsWithUnit(p.score)}
                   </span>
-                  {!p.connected ? (
-                    <span className="text-[10px] text-amber-600 dark:text-amber-400 shrink-0">
-                      Away{missedCount > 0 ? ` (${missedCount}/3)` : ''}
+                  {p.hasLeft ? (
+                    <span className="text-[10px] font-semibold text-[#dc2626] dark:text-[#f87171] shrink-0">
+                      Left
+                    </span>
+                  ) : !p.connected ? (
+                    <span className="text-[10px] text-[#dc2626] dark:text-[#f87171] shrink-0">
+                      Offline{missedCount > 0 ? ` (${missedCount}/3)` : ''}
                     </span>
                   ) : !isReveal ? (
                     <span
                       className={`text-[10px] sm:text-[11px] font-medium shrink-0 ${
                         hasLocked
                           ? 'text-sky-600 dark:text-sky-300'
-                          : 'text-slate-400 dark:text-slate-500'
+                          : p.presenceStatus === 'idle'
+                            ? 'text-[#ca8a04] dark:text-[#facc15]'
+                            : 'text-slate-400 dark:text-slate-500'
                       }`}
                     >
-                      {hasLocked ? 'Locked' : '...'}
+                      {hasLocked
+                        ? isMe && snapshot.selfSkipped
+                          ? 'Skipped'
+                          : 'Locked'
+                        : p.presenceStatus === 'idle'
+                          ? 'AFK'
+                          : '...'}
                     </span>
                   ) : null}
                 </div>
@@ -333,7 +478,7 @@ export const ArenaView: React.FC<ArenaViewProps> = ({
           questionStartedAt={snapshot.questionStartedAt}
           serverOffsetMs={serverOffsetMs}
           timeLimitSec={snapshot.settings.timeLimitSec}
-          selfLocked={snapshot.selfLockedOption !== null}
+          selfLocked={selfSubmitted}
         />
       )}
 
@@ -344,9 +489,9 @@ export const ArenaView: React.FC<ArenaViewProps> = ({
             {topic ? `${topic} · ` : ''}Question {snapshot.currentQuestionIndex + 1} of{' '}
             {snapshot.totalQuestions}
           </span>
-          {!isReveal && !isSpectator && snapshot.selfLockedOption === null && (
+          {!isReveal && !isSpectator && !selfSubmitted && (
             <span className="hidden sm:inline text-slate-500 dark:text-slate-400">
-              Press A–D or 1–4 to lock in
+              Press A–D to lock or S to skip
             </span>
           )}
         </div>
@@ -379,7 +524,7 @@ export const ArenaView: React.FC<ArenaViewProps> = ({
           let keyStyle =
             'border-slate-300 dark:border-white/15 bg-white dark:bg-[#0B1221] text-slate-700 dark:text-slate-300';
 
-          if (!isReveal && !isSpectator && snapshot.selfLockedOption !== null) {
+          if (!isReveal && !isSpectator && selfSubmitted) {
             if (isSelfSelectedBeforeReveal) {
               cardStyle =
                 'border-sky-500 dark:border-sky-400 bg-sky-50 dark:bg-sky-500/20 text-sky-950 dark:text-white';
@@ -412,7 +557,7 @@ export const ArenaView: React.FC<ArenaViewProps> = ({
             }
           }
 
-          const disabled = isSpectator || isReveal || snapshot.selfLockedOption !== null;
+          const disabled = isSpectator || isReveal || selfSubmitted;
 
           return (
             <button
@@ -469,36 +614,62 @@ export const ArenaView: React.FC<ArenaViewProps> = ({
         })}
       </section>
 
-      {/* Lock-in Status Banner placed below options so tapping never shifts buttons */}
+      {/* Skip / Leave Blank Action placed cleanly below options (zero layout shift on option tap) */}
+      {!isReveal && !isSpectator && !selfSubmitted && (
+        <div className="mb-4 sm:mb-6 flex justify-end">
+          <button
+            type="button"
+            onClick={handleSkipTap}
+            className="min-h-[44px] w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-xl border border-slate-300 dark:border-white/15 bg-slate-50 dark:bg-[#131D33] px-4 py-2.5 text-xs sm:text-sm font-semibold text-slate-700 dark:text-slate-200 hover:border-amber-500/70 hover:bg-amber-50/70 dark:hover:bg-[#192642] active:scale-[0.985] transition-all cursor-pointer"
+          >
+            <SkipForward className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0" />
+            <span>
+              Skip / Leave Blank (0 pts{scoringMode === 'exam' ? ' · avoids −0.25' : ''})
+            </span>
+          </button>
+        </div>
+      )}
+
+      {/* Lock-in / Skipped Status Banner placed below options so tapping never shifts buttons */}
       {!isReveal &&
         !isSpectator &&
-        (snapshot.selfLockedOption !== null || connectedOthersLockedCount > 0) && (
+        (selfSubmitted || connectedOthersLockedCount > 0) && (
           <div className="mb-4 sm:mb-6 grid grid-cols-1 sm:grid-cols-2 gap-2.5 sm:gap-3">
-            {snapshot.selfLockedOption !== null && (
+            {selfSubmitted && (
               <div
-                className={`flex items-center gap-2 rounded-xl border border-sky-400/50 dark:border-sky-400/40 bg-sky-50 dark:bg-sky-500/15 px-3.5 py-2.5 text-xs sm:text-sm font-semibold text-sky-900 dark:text-sky-100 ${
-                  connectedOthersLockedCount === 0 ? 'sm:col-span-2' : ''
-                }`}
+                className={`flex items-center gap-2 rounded-xl border px-3.5 py-2.5 text-xs sm:text-sm font-semibold ${
+                  snapshot.selfSkipped
+                    ? 'border-slate-300 dark:border-white/20 bg-slate-100 dark:bg-white/5 text-slate-800 dark:text-slate-200'
+                    : 'border-sky-400/50 dark:border-sky-400/40 bg-sky-50 dark:bg-sky-500/15 text-sky-900 dark:text-sky-100'
+                } ${connectedOthersLockedCount === 0 ? 'sm:col-span-2' : ''}`}
               >
-                <Lock className="h-4 w-4 text-sky-600 dark:text-sky-300 shrink-0" />
+                {snapshot.selfSkipped ? (
+                  <SkipForward className="h-4 w-4 text-slate-500 dark:text-slate-300 shrink-0" />
+                ) : (
+                  <Lock className="h-4 w-4 text-sky-600 dark:text-sky-300 shrink-0" />
+                )}
                 <span>
-                  {totalConnectedOtherCount === 0
-                    ? 'Locked In! Revealing answer...'
-                    : `Locked In! Waiting for Opponents (${connectedOthersLockedCount}/${totalConnectedOtherCount})...`}
+                  {snapshot.selfSkipped
+                    ? totalConnectedOtherCount === 0
+                      ? 'Skipped (0 pts · Left Blank)! Revealing answer...'
+                      : `Skipped (0 pts · Left Blank)! Waiting for Opponents (${connectedOthersLockedCount}/${totalConnectedOtherCount})...`
+                    : totalConnectedOtherCount === 0
+                      ? 'Locked In! Revealing answer...'
+                      : `Locked In! Waiting for Opponents (${connectedOthersLockedCount}/${totalConnectedOtherCount})...`}
                 </span>
               </div>
             )}
             {connectedOthersLockedCount > 0 && (
               <div
                 className={`flex items-center gap-2 rounded-xl border border-amber-400/60 dark:border-amber-400/40 bg-amber-50 dark:bg-amber-500/15 px-3.5 py-2.5 text-xs sm:text-sm font-semibold text-amber-950 dark:text-amber-100 ${
-                  snapshot.selfLockedOption === null ? 'sm:col-span-2' : ''
+                  !selfSubmitted ? 'sm:col-span-2' : ''
                 }`}
               >
                 <Lock className="h-4 w-4 text-amber-600 dark:text-amber-300 shrink-0" />
                 <span>
                   {connectedOthersLockedCount === 1
-                    ? '1 player has locked in!'
-                    : `${connectedOthersLockedCount} of ${totalConnectedOtherCount} opponents locked in!`}
+                    ? '1 opponent has submitted!'
+                    : `${connectedOthersLockedCount} of ${totalConnectedOtherCount} opponents submitted!`}
                 </span>
               </div>
             )}
@@ -514,9 +685,26 @@ export const ArenaView: React.FC<ArenaViewProps> = ({
               if (!p) return null;
               const isMe = player.id === snapshot.selfId;
               const pickedLetter =
-                p.optionIndex !== null ? OPTION_LETTERS[p.optionIndex] : 'No Pick';
+                p.optionIndex !== null
+                  ? OPTION_LETTERS[p.optionIndex]
+                  : p.skipped
+                    ? 'Blank'
+                    : 'No Pick';
               const sec =
-                p.elapsedMs !== null ? `${(p.elapsedMs / 1000).toFixed(1)}s` : 'Timed Out';
+                p.elapsedMs !== null
+                  ? `${(p.elapsedMs / 1000).toFixed(1)}s`
+                  : p.skipped
+                    ? 'Skipped'
+                    : 'Timed Out';
+              const statusText = p.isCorrect
+                ? p.speedBonus > 0
+                  ? `Correct (+${p.basePoints} +${p.speedBonus} speed)`
+                  : 'Correct'
+                : p.skipped
+                  ? 'Skipped (Blank)'
+                  : p.optionIndex === null
+                    ? 'Timed Out'
+                    : 'Wrong';
 
               return (
                 <div
@@ -524,17 +712,31 @@ export const ArenaView: React.FC<ArenaViewProps> = ({
                   className="flex items-center justify-between rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-[#0B1221] px-3.5 py-2.5"
                 >
                   <div className="min-w-0">
-                    <div className="text-sm font-semibold text-slate-900 dark:text-white truncate">
-                      {isMe ? `${player.name} (You)` : player.name}
+                    <div className="flex items-center gap-1.5 text-sm font-semibold text-slate-900 dark:text-white">
+                      <PresenceDot
+                        status={player.presenceStatus}
+                        hasLeft={player.hasLeft}
+                        size="sm"
+                      />
+                      <span className="truncate">
+                        {isMe ? `${player.name} (You)` : player.name}
+                      </span>
+                      {player.hasLeft && (
+                        <span className="text-[10px] font-semibold text-[#dc2626] dark:text-[#f87171] shrink-0">
+                          Left
+                        </span>
+                      )}
                     </div>
                     <div className="mt-0.5 flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
                       <span>
-                        Chose:{' '}
+                        Pick:{' '}
                         <strong
                           className={
                             p.isCorrect
                               ? 'text-emerald-700 dark:text-emerald-400'
-                              : 'text-red-600 dark:text-red-400'
+                              : p.optionIndex === null
+                                ? 'text-slate-500 dark:text-slate-400'
+                                : 'text-red-600 dark:text-red-400'
                           }
                         >
                           {pickedLetter}
@@ -550,13 +752,15 @@ export const ArenaView: React.FC<ArenaViewProps> = ({
                       className={`font-mono-tabular text-sm font-bold ${
                         p.totalPoints > 0
                           ? 'text-emerald-700 dark:text-emerald-400'
-                          : 'text-slate-500 dark:text-slate-400'
+                          : p.totalPoints < 0
+                            ? 'text-red-600 dark:text-red-400'
+                            : 'text-slate-500 dark:text-slate-400'
                       }`}
                     >
-                      {p.totalPoints > 0 ? `+${p.totalPoints} pt` : '0 pts'}
+                      {formatPointsWithUnit(p.totalPoints, true)}
                     </div>
                     <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                      {p.isCorrect ? 'Correct' : p.optionIndex === null ? 'Timed Out' : 'Wrong'}
+                      {statusText}
                     </div>
                   </div>
                 </div>
@@ -616,6 +820,6 @@ export const ArenaView: React.FC<ArenaViewProps> = ({
           title="Match Reactions & Chat"
         />
       </div>
-    </main>
+    </div>
   );
 };

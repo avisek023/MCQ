@@ -1,6 +1,14 @@
 import React, { useState } from 'react';
 import { Check, Copy, Play, Settings2, Share2, UserCheck, Users, UserX } from 'lucide-react';
-import type { HostMode, Question, RoomSettings, RoomSnapshot } from '../shared/types';
+import type {
+  HostMode,
+  Question,
+  RoomSettings,
+  RoomSnapshot,
+  ScoringMode,
+} from '../shared/types';
+import { SCORING_MODE_DETAILS } from '../shared/types';
+import { PresenceDot } from './PresenceDot';
 import { QuestionManager } from './QuestionManager';
 import { RoomChat } from './RoomChat';
 
@@ -51,6 +59,7 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
   const isHost = Boolean(self?.isHost);
   const canEditDeck = isHost || snapshot.settings.allowGuestUpload;
   const hostMode = snapshot.settings.hostMode ?? 'moderator';
+  const scoringMode: ScoringMode = snapshot.settings.scoringMode ?? 'exam';
   const canStartMatch = hostMode === 'solo' || connectedParticipants.length >= 1;
   const activePlayerCount =
     hostMode === 'solo'
@@ -120,7 +129,7 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
   };
 
   return (
-    <main className="mx-auto max-w-6xl px-4 sm:px-6 py-6 sm:py-10">
+    <div className="mx-auto max-w-6xl px-4 sm:px-6 py-6 sm:py-10">
       {/* Lobby Header Strip */}
       <div className="mb-6 sm:mb-8 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 sm:gap-6 border-b border-slate-200 dark:border-white/10 pb-5 sm:pb-6">
         <div>
@@ -191,11 +200,15 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
               {/* Host Seat */}
               {hostPlayer && (
                 <div className="flex items-center justify-between rounded-lg border border-amber-400/60 dark:border-amber-400/35 bg-white dark:bg-[#0B1221] px-4 py-3">
-                  <div>
-                    <div className="text-sm font-semibold text-slate-900 dark:text-white">
-                      {hostPlayer.name}
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white">
+                      <PresenceDot
+                        status={hostPlayer.presenceStatus}
+                        hasLeft={hostPlayer.hasLeft}
+                      />
+                      <span className="truncate">{hostPlayer.name}</span>
                       {hostPlayer.id === snapshot.selfId && (
-                        <span className="text-xs font-medium text-amber-600 dark:text-amber-300 ml-1.5">
+                        <span className="text-xs font-medium text-amber-600 dark:text-amber-300 shrink-0">
                           (You)
                         </span>
                       )}
@@ -204,13 +217,21 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
                       {hostRoleSubtitle}
                     </div>
                   </div>
-                  <UserCheck
-                    className={`h-5 w-5 shrink-0 ${
-                      hostPlayer.connected
-                        ? 'text-emerald-600 dark:text-emerald-400'
-                        : 'text-amber-500 dark:text-amber-400'
-                    }`}
-                  />
+                  <div className="flex items-center gap-2 shrink-0">
+                    <PresenceDot
+                      status={hostPlayer.presenceStatus}
+                      hasLeft={hostPlayer.hasLeft}
+                      showTextLabel
+                      size="sm"
+                    />
+                    <UserCheck
+                      className={`h-5 w-5 shrink-0 ${
+                        hostPlayer.connected
+                          ? 'text-emerald-600 dark:text-emerald-400'
+                          : 'text-amber-500 dark:text-amber-400'
+                      }`}
+                    />
+                  </div>
                 </div>
               )}
 
@@ -252,18 +273,28 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
                         : 'border-slate-200 dark:border-white/10'
                     }`}
                   >
-                    <div>
-                      <div className="text-sm font-semibold text-slate-900 dark:text-white">
-                        {participant.name}
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white">
+                        <PresenceDot
+                          status={participant.presenceStatus}
+                          hasLeft={participant.hasLeft}
+                        />
+                        <span className="truncate">{participant.name}</span>
                         {isMe && (
-                          <span className="text-xs font-medium text-sky-600 dark:text-sky-300 ml-1.5">
+                          <span className="text-xs font-medium text-sky-600 dark:text-sky-300 shrink-0">
                             (You)
                           </span>
                         )}
                       </div>
-                      <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                        Participant {slotIdx + 1} ·{' '}
-                        {participant.connected ? 'Connected' : 'Reconnecting...'}
+                      <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 flex items-center gap-2">
+                        <span>Participant {slotIdx + 1}</span>
+                        <span aria-hidden="true">·</span>
+                        <PresenceDot
+                          status={participant.presenceStatus}
+                          hasLeft={participant.hasLeft}
+                          showTextLabel
+                          size="sm"
+                        />
                       </div>
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
@@ -400,18 +431,41 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
                 </div>
               </div>
 
-              <div className="flex items-center justify-between border-t border-slate-200 dark:border-white/10 pt-3.5">
-                <div>
-                  <div className="text-sm font-medium text-slate-800 dark:text-slate-200">
-                    Scoring System
-                  </div>
-                  <div className="text-xs text-slate-500 dark:text-slate-400">
-                    1 point awarded for each correct answer
-                  </div>
+              <div className="border-t border-slate-200 dark:border-white/10 pt-3.5">
+                <div className="flex items-center justify-between text-xs font-medium text-slate-700 dark:text-slate-300 mb-2">
+                  <span>Scoring Rule</span>
+                  <span className="font-semibold text-emerald-700 dark:text-emerald-400">
+                    {SCORING_MODE_DETAILS[scoringMode].label}
+                  </span>
                 </div>
-                <span className="font-mono-tabular rounded-md border border-emerald-400 dark:border-emerald-500/35 bg-emerald-50 dark:bg-emerald-500/15 px-3 py-1.5 text-xs font-semibold text-emerald-700 dark:text-emerald-300">
-                  +1 pt / correct
-                </span>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {(['exam', 'accuracy', 'speed'] as const).map((modeKey) => {
+                    const active = scoringMode === modeKey;
+                    return (
+                      <button
+                        key={modeKey}
+                        type="button"
+                        disabled={!isHost}
+                        onClick={() =>
+                          onUpdateSettings({
+                            scoringMode: modeKey,
+                            speedBonusEnabled: modeKey === 'speed',
+                          })
+                        }
+                        className={`rounded-lg py-2 px-2 text-xs font-semibold transition-colors cursor-pointer disabled:cursor-default ${
+                          active
+                            ? 'bg-emerald-600 text-white shadow-xs'
+                            : 'bg-white dark:bg-[#0B1221] text-slate-700 dark:text-slate-300 hover:text-slate-950 dark:hover:text-white border border-slate-200 dark:border-white/10'
+                        }`}
+                      >
+                        {SCORING_MODE_DETAILS[modeKey].label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="mt-1.5 text-[11px] text-slate-500 dark:text-slate-400">
+                  {SCORING_MODE_DETAILS[scoringMode].description}
+                </p>
               </div>
 
               <div className="flex items-center justify-between border-t border-slate-200 dark:border-white/10 pt-3.5">
@@ -512,6 +566,6 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
           />
         </div>
       </div>
-    </main>
+    </div>
   );
 };

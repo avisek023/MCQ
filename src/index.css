@@ -9,6 +9,13 @@
     --font-mono: 'JetBrains Mono', ui-monospace, monospace;
   }
 
+  html,
+  body,
+  #root {
+    height: 100%;
+    overflow: hidden;
+  }
+
   html {
     -webkit-text-size-adjust: 100%;
     color-scheme: light;

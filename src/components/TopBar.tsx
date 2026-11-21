@@ -1,13 +1,16 @@
 import React from 'react';
-import { Moon, Sun, Volume2, VolumeX } from 'lucide-react';
+import { Maximize2, Minimize2, Moon, Sun, Volume2, VolumeX } from 'lucide-react';
 
 interface TopBarProps {
   inRoom: boolean;
   roomCode?: string;
   muted: boolean;
   theme: 'dark' | 'light';
+  isFullscreen: boolean;
+  fullscreenSupported: boolean;
   onToggleMute: () => void;
   onToggleTheme: () => void;
+  onToggleFullscreen: () => void;
   onPrimaryAction: () => void;
   onNavigateSection?: (sectionId: string) => void;
 }
@@ -17,8 +20,11 @@ export const TopBar: React.FC<TopBarProps> = ({
   roomCode,
   muted,
   theme,
+  isFullscreen,
+  fullscreenSupported,
   onToggleMute,
   onToggleTheme,
+  onToggleFullscreen,
   onPrimaryAction,
   onNavigateSection,
 }) => {
@@ -43,8 +49,24 @@ export const TopBar: React.FC<TopBarProps> = ({
     </button>
   );
 
+  const fullscreenBtn = fullscreenSupported ? (
+    <button
+      type="button"
+      onClick={onToggleFullscreen}
+      aria-label={isFullscreen ? 'Exit Full Screen' : 'Enter Full Screen'}
+      title={isFullscreen ? 'Exit Full Screen' : 'Enter Full Screen'}
+      className="inline-flex min-h-[40px] min-w-[40px] items-center justify-center rounded-lg border border-slate-200 dark:border-white/15 bg-slate-100 dark:bg-[#131D33] px-2.5 py-1.5 text-slate-700 dark:text-slate-200 hover:border-slate-300 dark:hover:border-white/30 active:scale-[0.98] transition-all shrink-0 cursor-pointer"
+    >
+      {isFullscreen ? (
+        <Minimize2 className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0" />
+      ) : (
+        <Maximize2 className="h-4 w-4 shrink-0" />
+      )}
+    </button>
+  ) : null;
+
   return (
-    <header className="sticky top-0 z-30 w-full border-b border-slate-200 dark:border-white/10 bg-white/95 dark:bg-[#0B1221]/95 backdrop-blur-md transition-colors duration-200">
+    <header className="relative z-50 shrink-0 w-full border-b border-slate-200 dark:border-white/10 bg-white/95 dark:bg-[#0B1221]/95 backdrop-blur-md pt-[env(safe-area-inset-top)] transition-colors duration-200">
       <div className="mx-auto flex h-14 sm:h-16 max-w-6xl items-center justify-between gap-2 sm:gap-6 px-3.5 sm:px-6">
         {/* Zone 1: Single text element wordmark */}
         <a
@@ -59,9 +81,9 @@ export const TopBar: React.FC<TopBarProps> = ({
           QuizDuel
         </a>
 
-        {/* Zone 2: Navigation, audio & dark/white mode switch */}
+        {/* Zone 2: Navigation, audio, dark/white mode switch & fullscreen toggle */}
         {!inRoom ? (
-          <nav className="flex items-center gap-2 sm:gap-5 text-sm font-medium text-slate-600 dark:text-slate-300">
+          <nav className="flex items-center gap-1.5 sm:gap-4 text-sm font-medium text-slate-600 dark:text-slate-300">
             <button
               type="button"
               onClick={() => onNavigateSection?.('how-it-works')}
@@ -99,9 +121,10 @@ export const TopBar: React.FC<TopBarProps> = ({
               </span>
             </button>
             {themeSwitchBtn}
+            {fullscreenBtn}
           </nav>
         ) : (
-          <nav className="flex items-center gap-2 sm:gap-4 text-sm font-medium text-slate-600 dark:text-slate-300">
+          <nav className="flex items-center gap-1.5 sm:gap-3 text-sm font-medium text-slate-600 dark:text-slate-300">
             <span className="font-mono-tabular text-xs sm:text-sm font-semibold text-slate-800 dark:text-slate-200 whitespace-nowrap shrink-0">
               Room {roomCode}
             </span>
@@ -121,6 +144,7 @@ export const TopBar: React.FC<TopBarProps> = ({
               </span>
             </button>
             {themeSwitchBtn}
+            {fullscreenBtn}
           </nav>
         )}
 
@@ -138,3 +162,4 @@ export const TopBar: React.FC<TopBarProps> = ({
     </header>
   );
 };
+
